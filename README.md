@@ -8,6 +8,13 @@ It does not contain the application, user database, Telegram credentials or SSH 
 both jobs succeeded; KudaGO published 24 events / 46 sessions, Yandex published
 13 events. The server confirmed ingestion without adding duplicate cards.
 
+[Expanded cloud run, 19 October 2026](https://github.com/leomanchic/hangingout-collector/actions/runs/39257213976)
+published 263 Yandex event/venue records with 1,814 exact sessions in all six
+categories. Together with the verified initial deep KudaGO import, the catalogue
+reached 496 event/venue cards and 2,194 sessions (327 distinct titles). The same
+film at different cinemas has distinct venue records; these are not ingestion
+duplicates. Counts are a verification snapshot, not a guaranteed hourly yield.
+
 The GitHub Actions workflow runs on standard Ubuntu runners every hour at minute 23
 (UTC), and can also be started from **Actions → Collect Moscow events → Run workflow**.
 KudaGO and Yandex run independently: failure of one source does not stop the other.
