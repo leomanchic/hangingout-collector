@@ -16,7 +16,7 @@ from .collector_frontier import page_window, interleave
 
 
 async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
-    from playwright.async_api import async_playwright, Error as BrowserError, TimeoutError as BrowserTimeout
+    from playwright.async_api import async_playwright, Error as BrowserError
     since = datetime.now(timezone.utc)
     until = since + timedelta(days=days)
     records, skipped, visited = {}, Counter(), 0
@@ -28,7 +28,7 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                 await context.route("**/*", lambda route: route.abort() if route.request.resource_type in {"image", "media", "font"} else route.continue_())
                 page = await context.new_page()
 
-                async def load(url, *, home=False):
+                async def load(url, *, home=False, raw=False):
                     response = await page.goto(url, wait_until="domcontentloaded", timeout=25_000)
                     # The public site may run its own JS on first visit. No CAPTCHA
                     # solving, cookie extraction, proxy rotation or stealth patches.
@@ -38,7 +38,7 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                         raise SyncError(f"kudago_http_{response.status if response else 'missing'}")
                     if page.url.rstrip("/") != url.rstrip("/"):
                         raise SyncError("kudago_unexpected_redirect")
-                    html = await page.content()
+                    html = await response.text() if raw and response is not None else await page.content()
                     if len(html.encode("utf-8")) > 8_000_000:
                         raise SyncError("page_too_large")
                     return html
@@ -50,27 +50,19 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                     await asyncio.sleep(1)
                     html = await load(ORIGIN + path)
                     batches = [listing_links(html)]
-                    previous = batches[0]
-                    for number in range(2, max(window) + 1):
-                        button = page.locator(f'.feed-pagination__button-{number}')
-                        try:
-                            # Pagination is hydrated after the document loads.
-                            # Immediate count()/is_visible() races on CI runners.
-                            await button.wait_for(state='visible', timeout=8_000)
-                        except BrowserTimeout:
+                    known = set(batches[0])
+                    for number in window[1:]:
+                        await asyncio.sleep(1)
+                        # The public Next-page button requests this very URL.
+                        # Read its HTML directly so slow client hydration cannot
+                        # silently restrict cloud runs to page 1.
+                        html = await load(ORIGIN + path + f'?get_facets=1&page={number}', raw=True)
+                        links = listing_links(html)
+                        if not links or not set(links) - known:
                             pagination_stops[path] = number
                             break
-                        await asyncio.sleep(1)
-                        await button.click()
-                        await page.wait_for_function('old => { const a=document.querySelector("a.post-title-link"); return a && a.href !== old; }',
-                                                     arg=previous[0] if previous else '', timeout=15_000)
-                        html = await page.content()
-                        links = listing_links(html)
-                        if not links or links == previous:
-                            break
-                        previous = links
-                        if number in window:
-                            batches.append(links)
+                        known.update(links)
+                        batches.append(links)
                     group = interleave(batches)
                     groups.append(group)
                     lanes[path] = len(group)

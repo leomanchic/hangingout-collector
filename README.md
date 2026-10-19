@@ -34,8 +34,9 @@ destination, event schema, signature or workflow configuration.
   the entire request budget. Actual category coverage depends on confirmed times.
 - Every hour refreshes page 1 and rotates a deeper band: pages 2–4, then 5–7,
   then 8–10. The cycle covers the first ten pages without re-reading every page
-  of every listing in every run. KudaGO pagination uses its normal page buttons;
-  reaching deeper buttons may require traversing intervening pages.
+  of every listing in every run. KudaGO uses the public HTML URLs observed in its
+  Next-page button requests. Empty or repeated pages end that lane; categories
+  with fewer pages naturally have smaller discovery counts.
 - KudaGO: up to 300 distinct public event cards per run, with at least one second
   between navigations. Explicit showtimes and one identifiable venue are required.
 - Yandex Afisha: up to four listing pages per lane and 120 additional event-detail
