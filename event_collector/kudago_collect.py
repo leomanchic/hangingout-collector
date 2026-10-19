@@ -3,7 +3,6 @@ import argparse
 import asyncio
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from itertools import zip_longest
 import json
 from pathlib import Path
 import sys
@@ -13,9 +12,10 @@ from .common import ROOT
 from .kudago_html import LISTINGS, ORIGIN, listing_links, normalize
 from .source_http import SyncError
 from .yandex_collect import publish
+from .collector_frontier import page_window, interleave
 
 
-async def collect(*, limit=120, days=30, channel="msedge"):
+async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
     from playwright.async_api import async_playwright, Error as BrowserError
     since = datetime.now(timezone.utc)
     until = since + timedelta(days=days)
@@ -44,15 +44,39 @@ async def collect(*, limit=120, days=30, channel="msedge"):
                     return html
 
                 await load(ORIGIN + "/msk/", home=True)
-                groups = []
+                groups, lanes = [], {}
+                window = page_window(pages)
                 for path in LISTINGS:
                     await asyncio.sleep(1)
-                    groups.append(listing_links(await load(ORIGIN + path)))
-                urls = list(dict.fromkeys(url for row in zip_longest(*groups) for url in row if url))[:limit]
+                    html = await load(ORIGIN + path)
+                    batches = [listing_links(html)]
+                    previous = batches[0]
+                    for number in range(2, max(window) + 1):
+                        button = page.locator(f'.feed-pagination__button-{number}')
+                        if await button.count() != 1 or not await button.is_visible():
+                            break
+                        await asyncio.sleep(1)
+                        await button.click()
+                        await page.wait_for_function('old => { const a=document.querySelector("a.post-title-link"); return a && a.href !== old; }',
+                                                     arg=previous[0] if previous else '', timeout=15_000)
+                        html = await page.content()
+                        links = listing_links(html)
+                        if not links or links == previous:
+                            break
+                        previous = links
+                        if number in window:
+                            batches.append(links)
+                    group = interleave(batches)
+                    groups.append(group)
+                    lanes[path] = len(group)
+                    print(json.dumps({'progress':'discovery', 'lane':path, 'cards':len(group)}), flush=True)
+                urls = interleave(groups, limit=limit)
                 for url in urls:
                     await asyncio.sleep(1)
                     html = await load(url)
                     visited += 1
+                    if visited % 50 == 0:
+                        print(json.dumps({'progress':'details', 'pages':visited, 'events':len(records)}), flush=True)
                     record, reason = normalize(html, url, since, until)
                     if record:
                         old = records.get(record["source_event_id"])
@@ -63,7 +87,8 @@ async def collect(*, limit=120, days=30, channel="msedge"):
                         skipped[reason] += 1
                 return list(records.values()), dict(source="kudago", fetched=visited, discovered=len(set(u for g in groups for u in g)),
                                                    imported=len(records), sessions=sum(len(r["occurrences"]) for r in records.values()),
-                                                   skipped=dict(skipped), coverage="partial", days=days)
+                                                   skipped=dict(skipped), categories=dict(Counter(r['category'] for r in records.values())),
+                                                   lanes=lanes, page_window=window, coverage="partial", days=days)
             finally:
                 await browser.close()
     except BrowserError:
@@ -73,20 +98,21 @@ async def collect(*, limit=120, days=30, channel="msedge"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--publish", action="store_true")
-    parser.add_argument("--limit", type=int, default=120)
-    parser.add_argument("--days", type=int, default=30)
+    parser.add_argument("--limit", type=int, default=300)
+    parser.add_argument("--pages", type=int, default=4)
+    parser.add_argument("--days", type=int, default=60)
     parser.add_argument("--channel", choices=["msedge", "chrome", "chromium"], default="msedge" if sys.platform == "win32" else "chromium")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/kudago-events.json")
     parser.add_argument("--key-file", type=Path, default=ROOT / "data/collector.key")
     args = parser.parse_args()
-    if not 1 <= args.limit <= 120 or not 1 <= args.days <= 90:
-        parser.error("--limit must be 1..120; --days must be 1..90")
+    if not 1 <= args.limit <= 600 or not 1 <= args.days <= 90 or not 1 <= args.pages <= 10:
+        parser.error("--limit must be 1..600; --days must be 1..90; --pages must be 1..10")
     try:
         if args.publish and not args.key_file.is_file():
             raise SyncError("collector_key_file_missing")
         async def run():
-            async with asyncio.timeout(480):
-                return await collect(limit=args.limit, days=args.days, channel=args.channel)
+            async with asyncio.timeout(900):
+                return await collect(limit=args.limit, days=args.days, pages=args.pages, channel=args.channel)
         records, stats = asyncio.run(run())
         if not records:
             print(json.dumps({**stats, "status": "empty_preserved"}))
@@ -102,7 +128,7 @@ def main():
             receipt.write_text(json.dumps(dict(at=time.time(), host="hangingout.ru", imported=len(records))), encoding="utf-8")
         print(json.dumps({**stats, "status": "ok"}, ensure_ascii=True))
     except SyncError as exc:
-        parser.exit(1, f"Collector stopped: {exc}. No successful publication confirmed.\n")
+        parser.exit(1, f"Collector stopped: {exc}. Check committed_batches if publication was partial.\n")
     except (OSError, ValueError, TypeError, AttributeError, KeyError, OverflowError, TimeoutError):
         parser.exit(1, "Collection stopped: file, data or timeout error. No successful publication confirmed.\n")
 

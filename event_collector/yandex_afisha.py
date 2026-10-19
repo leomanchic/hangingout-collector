@@ -19,7 +19,10 @@ PATH = "/moscow/selections/all-events-concert"
 ZONE = ZoneInfo("Europe/Moscow")
 SOURCE = "Яндекс Афиша"
 CATEGORIES = {"concert": "music", "theatre": "theatre", "art": "art",
-              "excursions": "walk", "cinema": "cinema", "education": "learning"}
+              "excursions": "walk", "cinema": "cinema", "education": "learning", "masterclass": "learning"}
+LISTINGS = {"music": PATH, "theatre": "/moscow/selections/all-events-theatre",
+            "art": "/moscow/selections/all-events-art", "walk": "/moscow/selections/all-events-excursions",
+            "learning": "/moscow/masterclass", "cinema": "/moscow/selections/all-events-cinema"}
 ASSIGNMENT = re.compile(r"\s*window\[['\"]__APOLLO_STATE__['\"]\]\s*=\s*(.*?)\s*;?\s*", re.S)
 LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"|new Date\("(?:[^"\\]|\\.)*"\)|\bundefined\b')
 
@@ -54,7 +57,7 @@ def resolve(state, value):
     return value
 
 
-def parse_page(html, *, page=1):
+def read_state(html):
     """Extract JSON-like state without executing any page-provided code."""
     if len(html.encode("utf-8")) > 8_000_000:
         raise SyncError("page_too_large")
@@ -73,6 +76,11 @@ def parse_page(html, *, page=1):
         raise SyncError("yandex_state_invalid_json") from None
     if not isinstance(state, dict) or not isinstance(state.get("ROOT_QUERY"), dict):
         raise SyncError("yandex_state_invalid_schema")
+    return state, parser
+
+
+def parse_page(html, *, page=1, path=PATH):
+    state, parser = read_state(html)
     items, stack, nodes = [], [(state, 0)], 0
     while stack:
         value, depth = stack.pop()
@@ -96,12 +104,74 @@ def parse_page(html, *, page=1):
         raise SyncError("yandex_no_event_schedules")
     next_page = False
     for href in parser.links:
-        parsed = urlsplit(urljoin(ORIGIN + PATH, href))
+        parsed = urlsplit(urljoin(ORIGIN + path, href))
         if (parsed.scheme == "https" and parsed.netloc == "afisha.yandex.ru"
-                and parsed.path.rstrip("/") == PATH
+                and parsed.path.rstrip("/") == path
                 and parse_qs(parsed.query) == {"page": [str(page + 1)]}):
             next_page = True
     return items, next_page
+
+
+def detail_items(html, expected_event_id):
+    """Only dated sessions in the requested event's public schedule, never recommendations.
+
+    Handle both performance schedules and dated cinema/masterclass slots. A
+    regularity/opening-hours summary alone cannot generate a single occurrence.
+    """
+    state, _ = read_state(html)
+    root = state["ROOT_QUERY"]
+    event = resolve(state, root.get('event(' + json.dumps({"id": expected_event_id}, separators=(",", ":")) + ')'))
+    if not isinstance(event, dict) or event.get("id") != expected_event_id:
+        raise SyncError("yandex_detail_event_mismatch")
+    items, seen = [], set()
+
+    def add(place_ref, session, day):
+        if not isinstance(day, str) or not isinstance(session, dict) or session.get("date") != day:
+            return
+        value = session.get("datetime")
+        if not isinstance(value, str) or not value.startswith(day + "T"):
+            return
+        place = resolve(state, place_ref) or {}
+        city = resolve(state, place.get("city")) or {}
+        key = (place.get("id"), value)
+        if key in seen:
+            return
+        seen.add(key)
+        ticket = resolve(state, session.get("ticket")) or {}
+        if ticket.get("saleStatus") in {"cancelled", "canceled"}:
+            return
+        price = ticket.get("price") or {}
+        prices = [{"currency": price.get("currency"), "value": price.get("min")}]
+        # This exact datetime is attached to this venue and date by the source.
+        schedule = {"dates": [day], "placesTotal": 1, "prices": prices,
+                    "regularity": {"singleShowtime": value}}
+        items.append({"event": event, "schedule": schedule, "place": place, "city": city, "dated_session": True})
+
+    for key, value in root.items():
+        if not isinstance(value, dict):
+            continue
+        if key.startswith("eventScheduleOther("):
+            try:
+                params = json.loads(key[len("eventScheduleOther("):-1])
+            except ValueError:
+                continue
+            if params.get("id") != expected_event_id:
+                continue
+            for group in value.get("byDate") or []:
+                for slot in group.get("sessions") or []:
+                    add(slot.get("place"), slot.get("session"), group.get("date"))
+        elif key.startswith("eventScheduleCinema:"):
+            try:
+                params = json.loads(key[len("eventScheduleCinema:"):])
+            except ValueError:
+                continue
+            if params.get("id") != expected_event_id:
+                continue
+            for group in value.get("items") or []:
+                for schedule in group.get("schedule") or []:
+                    for session in schedule.get("sessions") or []:
+                        add(group.get("place"), session, group.get("date"))
+    return items
 
 
 def normalize(item, since, until):
@@ -113,6 +183,11 @@ def normalize(item, since, until):
         return None, "other_or_unknown_city"
     category = CATEGORIES.get((event.get("type") or {}).get("code"))
     if not category:
+        tags = {tag.get('code') for key, value in event.items() if key.startswith('tags(') and isinstance(value, list)
+                for tag in value if isinstance(tag, dict)}
+        category = next((CATEGORIES[tag] for tag in ('masterclass', 'education', 'theatre', 'excursions', 'art', 'cinema', 'concert')
+                         if tag in tags), None)
+    if not category:
         return None, "other_category"
     venue, address = clean(place.get("title"), 200), clean(place.get("address"), 300)
     pid = place.get("id")
@@ -121,7 +196,7 @@ def normalize(item, since, until):
         return None, "no_single_known_venue"
     regularity = schedule.get("regularity") or {}
     value = regularity.get("singleShowtime")
-    if (event.get("permanent") or schedule.get("permanent") or schedule.get("multiSession")
+    if ((event.get("permanent") and not item.get("dated_session")) or schedule.get("permanent") or schedule.get("multiSession")
             or regularity.get("daily") or regularity.get("weekly")
             or not isinstance(value, str)
             or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?", value)):

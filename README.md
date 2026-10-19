@@ -27,13 +27,23 @@ No pull-request trigger executes untrusted contributor code with secrets.
 Source pages and their JavaScript are untrusted inputs; they cannot change the
 destination, event schema, signature or workflow configuration.
 
-## Collection limits
+## Discovery strategy and limits
 
-- KudaGO: up to 120 public cards from four Moscow listings, with one second between
-  navigations. Explicit upcoming showtimes and one identifiable venue are required.
-- Yandex Afisha: five pages of a Moscow concert selection; only exact single sessions
-  with a venue are imported.
-- Both cover the next 30 days, not the complete Moscow catalogue. Missing cards are
+- Six separate discovery lanes: music, theatre, exhibitions, excursions, learning
+  and cinema. Categories and pages take turns so promoted cards cannot exhaust
+  the entire request budget. Actual category coverage depends on confirmed times.
+- Every hour refreshes page 1 and rotates a deeper band: pages 2–4, then 5–7,
+  then 8–10. The cycle covers the first ten pages without re-reading every page
+  of every listing in every run. KudaGO pagination uses its normal page buttons;
+  reaching deeper buttons may require traversing intervening pages.
+- KudaGO: up to 300 distinct public event cards per run, with at least one second
+  between navigations. Explicit showtimes and one identifiable venue are required.
+- Yandex Afisha: up to four listing pages per lane and 120 additional event-detail
+  pages. Read explicit dated sessions attached to each event and venue from the
+  public page, including theatre schedules and dated cinema/masterclass slots.
+  Do not extrapolate daily/weekly summaries. Different venues keep separate IDs.
+- Both cover the next 60 days, not the complete Moscow catalogue. At most 100
+  nearest confirmed sessions are retained per event/venue per run. Missing cards are
   not treated as cancellations. Date ranges and venue opening hours are not showtimes.
 - Browser sessions are isolated. No saved personal cookies, CAPTCHA solving, stealth
   patches or proxy rotation. If a source blocks a runner, the job fails and the
@@ -41,6 +51,12 @@ destination, event schema, signature or workflow configuration.
 - Source attribution links are retained. Articles and photographs are not republished.
 - Server-side ingestion updates source IDs and checks cross-source duplicates while
   retaining existing user plans, links, prices and distinct showtimes.
+- Large results are split into signed batches of at most 120 records and 256 KiB.
+  Each receipt is checked. A failed later batch reports already committed batches;
+  re-running safely updates those records. Partial results never delete older ones.
+- Logs report discovered cards by lane, imported events/sessions by category,
+  rejected records and remaining detail budget. Discovery is partial, not proof
+  that every Moscow event or venue was visited.
 
 For local development: Python 3.12, `pip install -r requirements.txt`, then
 `python -m playwright install chromium`. Collect without publishing using

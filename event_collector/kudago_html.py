@@ -10,7 +10,8 @@ from .models import EventImport
 from .source_http import SyncError
 
 ORIGIN = "https://kudago.com"
-LISTINGS = ("/msk/concerts/", "/msk/theater/", "/msk/knowledge/", "/msk/events/")
+LISTINGS = ("/msk/concerts/", "/msk/theater/", "/msk/knowledge/",
+            "/msk/exhibitions/", "/msk/excursions/", "/msk/kino/")
 MONTHS = "января февраля марта апреля мая июня июля августа сентября октября ноября декабря".split()
 VOID = set("area base br col embed hr img input link meta param source track wbr".split())
 
@@ -113,9 +114,10 @@ def normalize(html, url, since, until):
         return None, "no_stable_event_id"
     crumbs = {urlsplit(n.attrs.get("href", "")).path for n in nodes
               if n.tag == "a" and n.has("crumbs-list-item-link")}
-    categories = (("/msk/theater/", "theatre"), ("/msk/cinema/", "cinema"),
+    categories = (("/msk/theater/", "theatre"), ("/msk/cinema/", "cinema"), ("/msk/kino/", "cinema"),
                   ("/msk/concerts/", "music"), ("/msk/exhibitions/", "art"),
-                  ("/msk/knowledge/", "learning"), ("/msk/tours/", "walk"))
+                  ("/msk/knowledge/", "learning"), ("/msk/tours/", "walk"),
+                  ("/msk/excursions/", "walk"), ("/msk/events/tour/", "walk"))
     category = next((target for path, target in categories if path in crumbs), None)
     if category is None:
         return None, "other_category"

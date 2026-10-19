@@ -23,7 +23,7 @@ def main():
         try:
             result = subprocess.run([sys.executable, "-m", f"event_collector.{source}_collect",
                                      "--channel", "chromium", "--publish", "--key-file", str(key_file)],
-                                    timeout=540, check=False)
+                                    timeout=960, check=False)
             return result.returncode
         except subprocess.TimeoutExpired:
             print("Collector timed out. Check the last successful receipt; existing catalogue is preserved.")

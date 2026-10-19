@@ -22,7 +22,7 @@ jobs:
       matrix:
         source: [kudago, yandex]
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 20
     concurrency:
       group: collect-${{ matrix.source }}
       cancel-in-progress: false
