@@ -61,10 +61,19 @@ class CollectorContracts(unittest.TestCase):
             self.assertEqual(key.read_text(),'a'*64)
             if os.name!='nt':
                 self.assertEqual(key.stat().st_mode & 0o777,0o600)
-            return SimpleNamespace(returncode=0)
-        with patch.dict('os.environ',{'COLLECTOR_SOURCE':'kudago','COLLECTOR_SECRET':'a'*64}), patch('subprocess.run',side_effect=child):
+            self.assertEqual(kwargs['env']['COLLECTOR_RUN_KEY'],'12345.1')
+            return SimpleNamespace(returncode=0,stdout=json.dumps({'status':'ok','imported':1,'published':{'status':'ok','batches':1,'imported':1,'sessions':2,'periods':0,'added':1}}))
+        with patch.dict('os.environ',{'COLLECTOR_SOURCE':'kudago','COLLECTOR_SECRET':'a'*64,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1','GITHUB_EVENT_NAME':'schedule'}), patch('subprocess.run',side_effect=child), patch('run_collector.report_run') as report:
             self.assertEqual(run_collector.main(),0)
+            self.assertEqual([call.args[4] for call in report.call_args_list],['running','success'])
         self.assertFalse(paths[0].exists())
+
+    def test_failed_or_empty_run_does_not_report_success(self):
+        from types import SimpleNamespace
+        for result in (SimpleNamespace(returncode=1,stdout=''),SimpleNamespace(returncode=0,stdout='{}')):
+            with patch.dict('os.environ',{'COLLECTOR_SOURCE':'kudago','COLLECTOR_SECRET':'a'*64,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1','GITHUB_EVENT_NAME':'schedule'}), patch('subprocess.run',return_value=result), patch('run_collector.report_run') as report, patch('builtins.print'):
+                self.assertEqual(run_collector.main(),1)
+                self.assertEqual([call.args[4] for call in report.call_args_list],['running','failed'])
 
     def test_missing_key_never_launches_browser(self):
         with patch.dict('os.environ',{'COLLECTOR_SOURCE':'kudago','COLLECTOR_SECRET':''}), patch('subprocess.run') as child, patch('builtins.print'):

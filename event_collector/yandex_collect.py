@@ -174,7 +174,7 @@ def publish(records, key_file, *, client=None, source="yandex"):
         except SyncError as exc:
             raise SyncError(f'{exc}; committed_batches={len(results)}; committed_events={sum(r["imported"] for r in results)}') from None
     return dict(status='ok', source=source, coverage='partial', batches=len(results),
-                **{key:sum(r.get(key, 0) for r in results) for key in ('imported','sessions','added')})
+                **{key:sum(r.get(key, 0) for r in results) for key in ('imported','sessions','periods','added')})
 
 
 def publish_batch(records, key_file, *, client=None, source="yandex"):
@@ -185,6 +185,9 @@ def publish_batch(records, key_file, *, client=None, source="yandex"):
     if not re.fullmatch(r"[a-f0-9]{64}", secret):
         raise SyncError("invalid_collector_key_file")
     payload = dict(version=1, batch_id=uuid.uuid4().hex, collected_at=datetime.now(timezone.utc).isoformat(), events=records)
+    import os
+    if os.environ.get('COLLECTOR_RUN_KEY'):
+        payload['run_key'] = os.environ['COLLECTOR_RUN_KEY']
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(body) > MAX_BYTES:
         raise SyncError("batch_too_large")

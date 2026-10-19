@@ -189,8 +189,16 @@ def normalize(html, url, since, until):
                 start = candidates[0]
                 key = f"t{int(start.timestamp())}"
                 occurrences[key] = dict(id=key, starts_at=start.astimezone(timezone.utc).isoformat(), timezone="Europe/Moscow")
+    period = None
     if not occurrences:
-        return None, "no_precise_upcoming_sessions"
+        # A source date span is a visiting window, never a midnight showtime.
+        # Reject unbounded/permanent placeholders instead of inventing an end.
+        if (category in {'art','walk','learning'} and 1 <= (upper.date()-lower.date()).days <= 1096
+                and upper.date() >= since.astimezone(ZONE).date() and lower.date() <= until.astimezone(ZONE).date()):
+            period = dict(date_from=lower.date().isoformat(),date_to=upper.date().isoformat(),
+                          timezone='Europe/Moscow',precision='estimated')
+        else:
+            return None, "no_precise_upcoming_sessions"
     prices = [n.text() for n in nodes if n.attrs.get("id") == "event-price" and n.text()]
     price_text = prices[0] if prices else ""
     price = None
@@ -204,5 +212,5 @@ def normalize(html, url, since, until):
                   city="Москва", category=category, venue=next(iter(venues)), address=next(iter(addresses)),
                   price=price, price_text=price_text, source_name=SOURCE, source_url=url,
                   source_event_id=next(iter(ids)), source_updated_at=None,
-                  occurrences=sorted(occurrences.values(), key=lambda o: o["starts_at"])[:100])
+                  occurrences=sorted(occurrences.values(), key=lambda o: o["starts_at"])[:100],period=period)
     return EventImport.model_validate(record).model_dump(), None

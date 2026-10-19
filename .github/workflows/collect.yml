@@ -2,7 +2,7 @@ name: Collect Moscow events
 
 on:
   schedule:
-    - cron: '23 * * * *'
+    - cron: '47 * * * *'
   workflow_dispatch:
     inputs:
       source:

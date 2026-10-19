@@ -36,6 +36,24 @@ destination, event schema, signature or workflow configuration.
 
 ## Discovery strategy and limits
 
+The hourly schedule is `47 * * * *` (UTC). A signed start/end receipt links each
+source job to its GitHub run and attempt. The server marks a run complete only
+when its totals match every acknowledged publication batch. Partial uploads,
+empty results, failures and timeouts never refresh the complete-success clock.
+An independent REG.RU CRON checks GitHub and receipts every five minutes:
+[/status](https://hangingout.ru/status), [/api/collector-status](https://hangingout.ru/api/collector-status).
+The separate `/api/collector-health` probe returns 503 when attention is needed;
+application health remains independent. Source freshness allows three hours,
+scheduler grace 45 minutes, and a stuck job 25 minutes. A greater than 70% drop
+against at least three prior scheduled runs is flagged; manual diagnostic runs
+are excluded from that comparison. Incidents are retained locally; no messages
+or email are sent. A watchdog/API failure cannot produce a green status.
+
+Bounded multi-day KudaGO visiting periods have their own date-only schema and
+an explicit estimated label. They expire after the final Moscow calendar day,
+or after seven days without a fresh source check. They create no attendance or
+companion session: visitors follow the attribution link to confirm opening hours.
+
 - Six separate discovery lanes: music, theatre, exhibitions, excursions, learning
   and cinema. Categories and pages take turns so promoted cards cannot exhaust
   the entire request budget. Actual category coverage depends on confirmed times.
@@ -45,7 +63,9 @@ destination, event schema, signature or workflow configuration.
   Next-page button requests. Empty or repeated pages end that lane; categories
   with fewer pages naturally have smaller discovery counts.
 - KudaGO: up to 300 distinct public event cards per run, with at least one second
-  between navigations. Explicit showtimes and one identifiable venue are required.
+  between navigations. One identifiable venue is required. Explicit showtimes are
+  retained as sessions; bounded multi-day exhibition/visiting dates become separate
+  estimated periods, never artificial midnight sessions.
   Renamed event URLs are followed; removed cards and cards converted into places
   or editorial lists are skipped. Challenges and foreign redirects still stop
   collection. Manual workflow input `kudago_limit` allows a smaller diagnostic

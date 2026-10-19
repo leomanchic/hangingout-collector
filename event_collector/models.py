@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 class Input(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -34,6 +34,20 @@ class OccurrenceInput(Input):
         return value
 
 
+class PeriodInput(Input):
+    date_from: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    date_to: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    timezone: Literal['Europe/Moscow'] = 'Europe/Moscow'
+    precision: Literal['estimated'] = 'estimated'
+
+    @model_validator(mode='after')
+    def ordered_dates(self):
+        first, last = date.fromisoformat(self.date_from), date.fromisoformat(self.date_to)
+        if not 1 <= (last - first).days <= 1096:
+            raise ValueError('Expected a bounded multi-day period')
+        return self
+
+
 class EventImport(Input):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=5000)
@@ -47,7 +61,16 @@ class EventImport(Input):
     source_url: str = Field(pattern=r"^https?://[^\s]+$", max_length=2000)
     source_event_id: str = Field(min_length=1, max_length=100)
     source_updated_at: str | None = None
-    occurrences: list[OccurrenceInput] = Field(min_length=1, max_length=100)
+    occurrences: list[OccurrenceInput] = Field(default_factory=list, max_length=100)
+    period: PeriodInput | None = None
+
+    @model_validator(mode='after')
+    def schedule_kind(self):
+        if bool(self.occurrences) == bool(self.period):
+            raise ValueError('Supply precise sessions or an estimated period')
+        if self.period and self.category not in {'art', 'walk', 'learning'}:
+            raise ValueError('Periods are supported for exhibitions and visiting activities')
+        return self
 
     @field_validator("source_updated_at")
     @classmethod
