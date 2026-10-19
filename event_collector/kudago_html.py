@@ -192,5 +192,5 @@ def normalize(html, url, since, until):
                   city="Москва", category=category, venue=next(iter(venues)), address=next(iter(addresses)),
                   price=price, price_text=price_text, source_name=SOURCE, source_url=url,
                   source_event_id=next(iter(ids)), source_updated_at=None,
-                  occurrences=sorted(occurrences.values(), key=lambda o: o["starts_at"]))
+                  occurrences=sorted(occurrences.values(), key=lambda o: o["starts_at"])[:100])
     return EventImport.model_validate(record).model_dump(), None

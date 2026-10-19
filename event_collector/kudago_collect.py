@@ -85,6 +85,14 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                         records[record["source_event_id"]] = record
                     else:
                         skipped[reason] += 1
+                # A deep crawl takes minutes. A slot that started during it must
+                # not invalidate the whole signed batch at the receiver.
+                cutoff = datetime.now(timezone.utc) + timedelta(seconds=30)
+                for key, record in list(records.items()):
+                    record['occurrences'] = [o for o in record['occurrences'] if datetime.fromisoformat(o['starts_at']) > cutoff][:100]
+                    if not record['occurrences']:
+                        del records[key]
+                        skipped['started_during_collection'] += 1
                 return list(records.values()), dict(source="kudago", fetched=visited, discovered=len(set(u for g in groups for u in g)),
                                                    imported=len(records), sessions=sum(len(r["occurrences"]) for r in records.values()),
                                                    skipped=dict(skipped), categories=dict(Counter(r['category'] for r in records.values())),

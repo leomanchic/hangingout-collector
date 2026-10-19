@@ -1,7 +1,6 @@
-"""Export verified Yandex sessions from a local browser to an import JSON file.
+"""Collect public Moscow categories and exact schedules; publish only with --publish.
 
 The browser uses an isolated temporary profile, never the user's saved cookies.
-This command does not publish to the live site or modify its database.
 """
 import argparse
 import asyncio
@@ -18,7 +17,7 @@ import uuid
 import httpx
 
 from .source_http import SyncError
-from .yandex_afisha import ORIGIN, LISTINGS, CATEGORIES, normalize, parse_page, detail_items
+from .yandex_afisha import ORIGIN, LISTINGS, normalize, parse_page, detail_items
 from .collector_frontier import page_window, interleave
 from .common import ROOT
 from .protocol import ENDPOINT, MAX_BYTES, signature

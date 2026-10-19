@@ -73,6 +73,16 @@ class ExpansionContracts(unittest.TestCase):
         self.assertEqual(sum(r is not None for r,_ in results),1)
         self.assertEqual([reason for _,reason in results],[None,'other_or_unknown_city'])
 
+    def test_dated_masterclass_slots_are_allowed_but_date_only_is_not_a_session(self):
+        data=state()
+        data['Event:1'].update(type={'code':'other'},permanent=True)
+        data['Event:1']['tags({"status":"approved"})']=[{'code':'masterclass'}]
+        items=detail_items(html(data),'event1')
+        self.assertEqual(normalize(items[0],NOW,NOW+timedelta(days=30))[0]['category'],'learning')
+        for slot in data['ROOT_QUERY']['eventScheduleOther({"id":"event1"})']['byDate'][0]['sessions']:
+            slot['session']['datetime']=None
+        self.assertEqual(detail_items(html(data),'event1'),[])
+
     def test_large_publication_splits_by_count_and_bytes(self):
         for records in ([{'n':i} for i in range(250)], [{'n':i,'text':'x'*5000} for i in range(90)]):
             calls=[]
