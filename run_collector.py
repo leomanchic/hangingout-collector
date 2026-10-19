@@ -46,8 +46,10 @@ def main():
                 if isinstance(value,dict) and 'published' in value: summary=value
             receipt=summary.get('published',{})
             if result.returncode or summary.get('status')!='ok' or receipt.get('status')!='ok':
-                report_run(key_file,run_key,source,trigger,'failed')
-                print('Collector failed or complete publication receipt is missing. Existing catalogue preserved.')
+                reason=re.search(r'Collector stopped: ([a-z][a-z0-9_]{0,79})(?:[.;\s]|$)',result.stderr or '')
+                error_code=reason[1] if reason else 'collector_process_failed'
+                report_run(key_file,run_key,source,trigger,'failed',{'error_code':error_code})
+                print('Collector failed: '+error_code+'. Existing catalogue preserved.')
                 return 1
             metrics={k:receipt.get(k,0) for k in ('batches','imported','sessions','periods','added')}
             metrics.update({k:summary.get(k,summary.get('discovery',{}).get(k,0)) for k in ('discovered','fetched')})

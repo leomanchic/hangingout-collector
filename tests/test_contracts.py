@@ -70,7 +70,7 @@ class CollectorContracts(unittest.TestCase):
 
     def test_failed_or_empty_run_does_not_report_success(self):
         from types import SimpleNamespace
-        for result in (SimpleNamespace(returncode=1,stdout=''),SimpleNamespace(returncode=0,stdout='{}')):
+        for result in (SimpleNamespace(returncode=1,stdout='',stderr='Collector stopped: yandex_captcha_required. Check receipts.'),SimpleNamespace(returncode=0,stdout='{}',stderr='')):
             with patch.dict('os.environ',{'COLLECTOR_SOURCE':'kudago','COLLECTOR_SECRET':'a'*64,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1','GITHUB_EVENT_NAME':'schedule'}), patch('subprocess.run',return_value=result), patch('run_collector.report_run') as report, patch('builtins.print'):
                 self.assertEqual(run_collector.main(),1)
                 self.assertEqual([call.args[4] for call in report.call_args_list],['running','failed'])
