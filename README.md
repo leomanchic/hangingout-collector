@@ -45,7 +45,7 @@ An independent REG.RU CRON checks GitHub and receipts every five minutes:
 The separate `/api/collector-health` probe returns 503 when attention is needed;
 application health remains independent. Source freshness allows three hours,
 scheduler grace 45 minutes, and a stuck job 25 minutes. A greater than 70% drop
-against at least three prior scheduled runs is flagged; manual diagnostic runs
+against at least three prior scheduled runs of the same page band is flagged; manual diagnostic runs
 are excluded from that comparison. Incidents are retained locally; no messages
 or email are sent. A watchdog/API failure cannot produce a green status.
 

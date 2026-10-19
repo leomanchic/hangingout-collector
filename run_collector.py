@@ -51,6 +51,8 @@ def main():
                 return 1
             metrics={k:receipt.get(k,0) for k in ('batches','imported','sessions','periods','added')}
             metrics.update({k:summary.get(k,summary.get('discovery',{}).get(k,0)) for k in ('discovered','fetched')})
+            window=summary.get('page_window',summary.get('discovery',{}).get('page_window',[1]))
+            metrics['page_band']=window[1] if len(window)>1 else 1
             report_run(key_file,run_key,source,trigger,'success',metrics)
             print('Complete run and all published batches acknowledged.')
             return 0
