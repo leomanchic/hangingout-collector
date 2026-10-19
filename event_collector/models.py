@@ -60,12 +60,15 @@ class EventImport(Input):
     source_name: str = Field(min_length=1, max_length=200)
     source_url: str = Field(pattern=r"^https?://[^\s]+$", max_length=2000)
     source_event_id: str = Field(min_length=1, max_length=100)
+    source_movie_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,48}$")
     source_updated_at: str | None = None
     occurrences: list[OccurrenceInput] = Field(default_factory=list, max_length=100)
     period: PeriodInput | None = None
 
     @model_validator(mode='after')
     def schedule_kind(self):
+        if self.source_movie_id and self.category != 'cinema':
+            raise ValueError('Movie identity is only valid for cinema')
         if bool(self.occurrences) == bool(self.period):
             raise ValueError('Supply precise sessions or an estimated period')
         if self.period and self.category not in {'art', 'walk', 'learning'}:

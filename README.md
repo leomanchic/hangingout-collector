@@ -15,6 +15,12 @@ reached 496 event/venue cards and 2,194 sessions (327 distinct titles). The same
 film at different cinemas has distinct venue records; these are not ingestion
 duplicates. Counts are a verification snapshot, not a guaranteed hourly yield.
 
+Cinema records also include `source_movie_id`: the provider's film ID, shared by
+all its cinemas. The application presents one film card with a cinema/day/session
+selector, while keeping venue and occurrence IDs for attendance and plans. This
+uses the same collected schedule; it does not add network requests or infer a
+film identity from a title. Existing 24-hex Yandex film/venue IDs remain compatible.
+
 The GitHub Actions workflow runs on standard Ubuntu runners every hour at minute 47
 (UTC), and can also be started from **Actions → Collect Moscow events → Run workflow**.
 KudaGO and Yandex run independently: failure of one source does not stop the other.

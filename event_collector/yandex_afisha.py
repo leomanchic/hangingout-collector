@@ -239,6 +239,7 @@ def normalize(item, since, until):
                   city="Москва", category=category, venue=venue, address=address,
                   price=price, price_text=price_text, source_name=SOURCE, source_url=url,
                   source_event_id=f"{eid}_{pid}", source_updated_at=None,
+                  source_movie_id=eid if category == 'cinema' else None,
                   occurrences=[dict(id=f"t{int(start.timestamp())}",
                                     starts_at=start.astimezone(timezone.utc).isoformat(), timezone="Europe/Moscow")])
     return EventImport.model_validate(record).model_dump(), None

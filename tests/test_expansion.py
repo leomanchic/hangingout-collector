@@ -81,6 +81,8 @@ class ExpansionContracts(unittest.TestCase):
             'items':[{'date':'2026-10-24','place':{'__ref':'Place:'+str(n)},'schedule':[{'sessions':[slot]}]} for n in (1,2)]}
         results=[normalize(i,NOW,NOW+timedelta(days=30)) for i in detail_items(html(data),'event1')]
         self.assertEqual(sum(r is not None for r,_ in results),1)
+        self.assertEqual(results[0][0]['source_movie_id'], 'event1')
+        self.assertEqual(results[0][0]['source_event_id'], 'event1_place1')
         self.assertEqual([reason for _,reason in results],[None,'other_or_unknown_city'])
 
     def test_dated_masterclass_slots_are_allowed_but_date_only_is_not_a_session(self):
