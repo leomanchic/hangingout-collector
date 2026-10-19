@@ -9,7 +9,8 @@ import sys
 import time
 
 from .common import ROOT
-from .kudago_html import LISTINGS, ORIGIN, listing_links, normalize
+from .kudago_html import LISTINGS, ORIGIN, listing_links, normalize, event_url
+from urllib.parse import urlsplit
 from .source_http import SyncError
 from .yandex_collect import publish
 from .collector_frontier import page_window, interleave
@@ -28,16 +29,25 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                 await context.route("**/*", lambda route: route.abort() if route.request.resource_type in {"image", "media", "font"} else route.continue_())
                 page = await context.new_page()
 
-                async def load(url, *, home=False, raw=False):
+                async def load(url, *, home=False, raw=False, card=False):
                     response = await page.goto(url, wait_until="domcontentloaded", timeout=25_000)
                     # The public site may run its own JS on first visit. No CAPTCHA
                     # solving, cookie extraction, proxy rotation or stealth patches.
                     if home:
                         await page.wait_for_selector("a.post-title-link", timeout=15_000)
+                    elif card and response is not None and response.status in {404, 410}:
+                        return None
                     elif response is None or response.status != 200:
                         raise SyncError(f"kudago_http_{response.status if response else 'missing'}")
                     if page.url.rstrip("/") != url.rstrip("/"):
-                        raise SyncError("kudago_unexpected_redirect")
+                        if not card or not event_url(page.url):
+                            # A removed card can redirect to a public listing.
+                            # A challenge, foreign host or authentication page
+                            # still stops the source; never try to bypass it.
+                            final = urlsplit(page.url)
+                            if card and final.scheme == 'https' and final.netloc == 'kudago.com' and final.path in {'/msk/', *LISTINGS} and not final.query:
+                                return None
+                            raise SyncError("kudago_unexpected_redirect")
                     html = await response.text() if raw and response is not None else await page.content()
                     if len(html.encode("utf-8")) > 8_000_000:
                         raise SyncError("page_too_large")
@@ -70,11 +80,14 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                 urls = interleave(groups, limit=limit)
                 for url in urls:
                     await asyncio.sleep(1)
-                    html = await load(url)
+                    html = await load(url, card=True)
                     visited += 1
                     if visited % 50 == 0:
                         print(json.dumps({'progress':'details', 'pages':visited, 'events':len(records)}), flush=True)
-                    record, reason = normalize(html, url, since, until)
+                    if html is None:
+                        skipped['removed_card'] += 1
+                        continue
+                    record, reason = normalize(html, event_url(page.url), since, until)
                     if record:
                         old = records.get(record["source_event_id"])
                         if old and old != record:

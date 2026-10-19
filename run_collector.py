@@ -10,6 +10,10 @@ import tempfile
 def main():
     source = os.environ.get("COLLECTOR_SOURCE", "")
     secret = os.environ.pop("COLLECTOR_SECRET", "")
+    limit = os.environ.get('KUDAGO_LIMIT', '300')
+    if not limit.isascii() or not limit.isdigit() or not 1 <= int(limit) <= 600:
+        print('KUDAGO_LIMIT must be 1..600.')
+        return 1
     if source not in {"kudago", "yandex"} or not re.fullmatch(r"[a-f0-9]{64}", secret):
         print("Collector configuration missing or invalid. Set COLLECTOR_SECRET in Actions secrets.")
         return 1
@@ -21,7 +25,8 @@ def main():
             stream.write(secret)
         secret = None
         try:
-            result = subprocess.run([sys.executable, "-m", f"event_collector.{source}_collect",
+            extra = ['--limit', limit] if source == 'kudago' else []
+            result = subprocess.run([sys.executable, "-m", f"event_collector.{source}_collect", *extra,
                                      "--channel", "chromium", "--publish", "--key-file", str(key_file)],
                                     timeout=960, check=False)
             return result.returncode

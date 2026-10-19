@@ -10,6 +10,10 @@ on:
         type: choice
         default: all
         options: [all, kudago, yandex]
+      kudago_limit:
+        description: Maximum KudaGO cards (20 for a quick diagnostic, 300 normally)
+        type: string
+        default: '300'
 
 permissions:
   contents: read
@@ -46,4 +50,5 @@ jobs:
         env:
           COLLECTOR_SECRET: ${{ secrets.COLLECTOR_SECRET }}
           COLLECTOR_SOURCE: ${{ matrix.source }}
+          KUDAGO_LIMIT: ${{ inputs.kudago_limit || '300' }}
         run: python run_collector.py
