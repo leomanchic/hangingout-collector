@@ -15,7 +15,7 @@ reached 496 event/venue cards and 2,194 sessions (327 distinct titles). The same
 film at different cinemas has distinct venue records; these are not ingestion
 duplicates. Counts are a verification snapshot, not a guaranteed hourly yield.
 
-The GitHub Actions workflow runs on standard Ubuntu runners every hour at minute 23
+The GitHub Actions workflow runs on standard Ubuntu runners every hour at minute 47
 (UTC), and can also be started from **Actions → Collect Moscow events → Run workflow**.
 KudaGO and Yandex run independently: failure of one source does not stop the other.
 GitHub schedules can be delayed. Public repository schedules may be disabled after

@@ -33,9 +33,22 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
             browser = await playwright.chromium.launch(channel=channel, headless=True)
             try:
                 page = await browser.new_page()
+                await page.route('**/*', lambda route: route.abort() if route.request.resource_type in {'image','media','font'} else route.continue_())
 
                 async def load_page(url):
-                    response = await page.goto(url, wait_until="domcontentloaded", timeout=25_000)
+                    # We parse the HTTP response body, not the hydrated DOM.
+                    # Waiting for page scripts can time out even when HTML is ready.
+                    response = None
+                    for attempt in range(2):
+                        try:
+                            response = await page.goto(url, wait_until="commit", timeout=25_000)
+                            break
+                        except BrowserError:
+                            if 'captcha' in page.url.lower():
+                                raise SyncError('yandex_captcha_required') from None
+                            if attempt:
+                                raise SyncError('yandex_navigation_timeout_or_network') from None
+                            await asyncio.sleep(3)
                     if "captcha" in page.url.lower():
                         raise SyncError("yandex_captcha_required")
                     permitted_alias = (urlsplit(url).path == '/moscow/selections/all-events-theatre'
