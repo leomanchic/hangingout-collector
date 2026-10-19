@@ -16,7 +16,7 @@ from .collector_frontier import page_window, interleave
 
 
 async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
-    from playwright.async_api import async_playwright, Error as BrowserError
+    from playwright.async_api import async_playwright, Error as BrowserError, TimeoutError as BrowserTimeout
     since = datetime.now(timezone.utc)
     until = since + timedelta(days=days)
     records, skipped, visited = {}, Counter(), 0
@@ -44,7 +44,7 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                     return html
 
                 await load(ORIGIN + "/msk/", home=True)
-                groups, lanes = [], {}
+                groups, lanes, pagination_stops = [], {}, {}
                 window = page_window(pages)
                 for path in LISTINGS:
                     await asyncio.sleep(1)
@@ -53,7 +53,12 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                     previous = batches[0]
                     for number in range(2, max(window) + 1):
                         button = page.locator(f'.feed-pagination__button-{number}')
-                        if await button.count() != 1 or not await button.is_visible():
+                        try:
+                            # Pagination is hydrated after the document loads.
+                            # Immediate count()/is_visible() races on CI runners.
+                            await button.wait_for(state='visible', timeout=8_000)
+                        except BrowserTimeout:
+                            pagination_stops[path] = number
                             break
                         await asyncio.sleep(1)
                         await button.click()
@@ -96,7 +101,8 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                 return list(records.values()), dict(source="kudago", fetched=visited, discovered=len(set(u for g in groups for u in g)),
                                                    imported=len(records), sessions=sum(len(r["occurrences"]) for r in records.values()),
                                                    skipped=dict(skipped), categories=dict(Counter(r['category'] for r in records.values())),
-                                                   lanes=lanes, page_window=window, coverage="partial", days=days)
+                                                   lanes=lanes, pagination_stops=pagination_stops,
+                                                   page_window=window, coverage="partial", days=days)
             finally:
                 await browser.close()
     except BrowserError:
