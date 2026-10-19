@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import httpx
 
 from event_collector.protocol import signature
 from event_collector.source_http import SyncError
 from event_collector.yandex_collect import publish
+import run_collector
 
 
 class CollectorContracts(unittest.TestCase):
@@ -47,6 +49,27 @@ class CollectorContracts(unittest.TestCase):
                 with self.assertRaises(SyncError):
                     publish([{}],key,source='kudago',client=client)
         self.assertEqual(len(calls),1)
+
+    def test_runner_uses_private_temporary_key_and_cleans_it(self):
+        paths=[]
+        def child(arguments, **kwargs):
+            import os
+            from types import SimpleNamespace
+            self.assertNotIn('COLLECTOR_SECRET',os.environ)
+            self.assertNotIn('a'*64,' '.join(arguments))
+            key=Path(arguments[-1]);paths.append(key)
+            self.assertEqual(key.read_text(),'a'*64)
+            if os.name!='nt':
+                self.assertEqual(key.stat().st_mode & 0o777,0o600)
+            return SimpleNamespace(returncode=0)
+        with patch.dict('os.environ',{'COLLECTOR_SOURCE':'kudago','COLLECTOR_SECRET':'a'*64}), patch('subprocess.run',side_effect=child):
+            self.assertEqual(run_collector.main(),0)
+        self.assertFalse(paths[0].exists())
+
+    def test_missing_key_never_launches_browser(self):
+        with patch.dict('os.environ',{'COLLECTOR_SOURCE':'kudago','COLLECTOR_SECRET':''}), patch('subprocess.run') as child, patch('builtins.print'):
+            self.assertEqual(run_collector.main(),1)
+            child.assert_not_called()
 
 
 if __name__ == '__main__':
