@@ -1,0 +1,1 @@
+"""Standalone public event collectors."""
