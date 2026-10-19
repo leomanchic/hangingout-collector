@@ -82,6 +82,18 @@ def event_url(url):
     return None
 
 
+def card_destination(url):
+    """A moved event stays importable; a card converted into a place is skipped."""
+    canonical = event_url(url)
+    if canonical:
+        return canonical
+    parsed = urlsplit(url)
+    if (parsed.scheme == 'https' and parsed.netloc == 'kudago.com' and not parsed.query and not parsed.fragment
+            and (parsed.path in {'/msk/', *LISTINGS} or re.fullmatch(r'/msk/(?:place|list)/[a-z0-9-]+/', parsed.path))):
+        return None
+    raise SyncError('kudago_unexpected_redirect')
+
+
 def listing_links(html):
     return list(dict.fromkeys(url for node in Document(html).root.nodes()
                              if node.tag == "a" and node.has("post-title-link")

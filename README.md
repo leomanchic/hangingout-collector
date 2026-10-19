@@ -46,6 +46,10 @@ destination, event schema, signature or workflow configuration.
   with fewer pages naturally have smaller discovery counts.
 - KudaGO: up to 300 distinct public event cards per run, with at least one second
   between navigations. Explicit showtimes and one identifiable venue are required.
+  Renamed event URLs are followed; removed cards and cards converted into places
+  or editorial lists are skipped. Challenges and foreign redirects still stop
+  collection. Manual workflow input `kudago_limit` allows a smaller diagnostic
+  pass; the hourly default remains 300.
 - Yandex Afisha: up to four listing pages per lane and 120 additional event-detail
   pages. Read explicit dated sessions attached to each event and venue from the
   public page, including theatre schedules and dated cinema/masterclass slots.

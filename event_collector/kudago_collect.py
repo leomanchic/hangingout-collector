@@ -9,8 +9,7 @@ import sys
 import time
 
 from .common import ROOT
-from .kudago_html import LISTINGS, ORIGIN, listing_links, normalize, event_url
-from urllib.parse import urlsplit
+from .kudago_html import LISTINGS, ORIGIN, listing_links, normalize, event_url, card_destination
 from .source_http import SyncError
 from .yandex_collect import publish
 from .collector_frontier import page_window, interleave
@@ -40,14 +39,10 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                     elif response is None or response.status != 200:
                         raise SyncError(f"kudago_http_{response.status if response else 'missing'}")
                     if page.url.rstrip("/") != url.rstrip("/"):
-                        if not card or not event_url(page.url):
-                            # A removed card can redirect to a public listing.
-                            # A challenge, foreign host or authentication page
-                            # still stops the source; never try to bypass it.
-                            final = urlsplit(page.url)
-                            if card and final.scheme == 'https' and final.netloc == 'kudago.com' and final.path in {'/msk/', *LISTINGS} and not final.query:
-                                return None
+                        if not card:
                             raise SyncError("kudago_unexpected_redirect")
+                        if card_destination(page.url) is None:
+                            return None
                     html = await response.text() if raw and response is not None else await page.content()
                     if len(html.encode("utf-8")) > 8_000_000:
                         raise SyncError("page_too_large")

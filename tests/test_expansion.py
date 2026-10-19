@@ -12,6 +12,7 @@ from event_collector.collector_frontier import interleave, page_window
 from event_collector.yandex_afisha import detail_items, normalize
 from event_collector.yandex_collect import export, publish
 from event_collector.source_http import SyncError
+from event_collector.kudago_html import card_destination
 
 NOW = datetime(2026, 10, 19, tzinfo=timezone.utc)
 
@@ -33,6 +34,15 @@ def html(data):
 
 
 class ExpansionContracts(unittest.TestCase):
+    def test_moved_kudago_event_and_event_converted_to_place(self):
+        url='https://kudago.com/msk/event/new-canonical-slug/'
+        self.assertEqual(card_destination(url),url)
+        # Actual failure encountered in the expanded public catalogue.
+        self.assertIsNone(card_destination('https://kudago.com/msk/place/petrovskij-dvorik/'))
+        for url in ('https://evil.test/msk/event/a/','https://kudago.com/spb/event/a/',
+                    'https://kudago.com/showcaptcha?token=private','https://kudago.com/login/'):
+            with self.assertRaises(SyncError):card_destination(url)
+
     def test_rotation_covers_ten_pages_without_starving_front_page(self):
         windows = [page_window(4,hour=i) for i in range(3)]
         self.assertEqual(windows, [[1,2,3,4],[1,5,6,7],[1,8,9,10]])
