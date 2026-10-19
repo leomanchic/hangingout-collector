@@ -4,6 +4,10 @@ Public Moscow event collection for [hangingout.ru](https://hangingout.ru).
 This repository contains only the collectors, their data contract and workflow.
 It does not contain the application, user database, Telegram credentials or SSH keys.
 
+[First verified cloud run, 19 October 2026](https://github.com/leomanchic/hangingout-collector/actions/runs/39253320842):
+both jobs succeeded; KudaGO published 24 events / 46 sessions, Yandex published
+13 events. The server confirmed ingestion without adding duplicate cards.
+
 The GitHub Actions workflow runs on standard Ubuntu runners every hour at minute 23
 (UTC), and can also be started from **Actions → Collect Moscow events → Run workflow**.
 KudaGO and Yandex run independently: failure of one source does not stop the other.
