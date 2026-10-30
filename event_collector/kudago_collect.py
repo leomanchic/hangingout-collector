@@ -47,12 +47,17 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                             if attempt == 2:
                                 raise SyncError('kudago_browser_navigation_failed') from None
                             await asyncio.sleep(2 ** attempt)
-                    if response is not None and response.status in {401, 403}:
-                        raise SyncError(f'kudago_http_{response.status}')
                     # The public site may run its own JS on first visit. No CAPTCHA
                     # solving, cookie extraction, proxy rotation or stealth patches.
                     if home:
-                        await page.wait_for_selector("a.post-title-link", timeout=15_000)
+                        try:
+                            await page.wait_for_selector("a.post-title-link", timeout=15_000)
+                        except BrowserError:
+                            if response is not None and response.status in {401,403}:
+                                raise SyncError(f'kudago_http_{response.status}') from None
+                            raise
+                        if 'captcha' in page.url.lower():
+                            raise SyncError('kudago_captcha_required')
                     elif card and response is not None and response.status in {404, 410}:
                         return None
                     elif response is None or response.status != 200:

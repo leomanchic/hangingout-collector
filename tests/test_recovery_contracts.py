@@ -10,9 +10,65 @@ from event_collector.source_http import SyncError, retry_delay
 from event_collector.yandex_collect import publish
 from event_collector.collector_report import report_run
 import run_collector
+import asyncio
+from types import SimpleNamespace
+from event_collector.kudago_collect import collect
 
 
 class RecoveryContracts(unittest.TestCase):
+    def test_kudago_home_can_finish_its_normal_script_before_http_classification(self):
+        class BrowserError(Exception): pass
+        class Page:
+            url=''
+            waits=0
+            async def goto(self,url,**kwargs):
+                self.url=url
+                return SimpleNamespace(status=403 if url.endswith('/msk/') else 200)
+            async def wait_for_selector(self,*args,**kwargs): self.waits+=1
+            async def content(self): return '<html></html>'
+        page=Page()
+        class Context:
+            async def route(self,*args): pass
+            async def new_page(self): return page
+        class Browser:
+            async def new_context(self): return Context()
+            async def close(self): pass
+        class Chromium:
+            async def launch(self,**kwargs): return Browser()
+        class Playwright:
+            async def __aenter__(self): return SimpleNamespace(chromium=Chromium())
+            async def __aexit__(self,*args): pass
+        module=SimpleNamespace(async_playwright=Playwright,Error=BrowserError)
+        async def pause(*args): pass
+        with patch.dict('sys.modules',{'playwright.async_api':module}), patch('asyncio.sleep',side_effect=pause):
+            records,stats=asyncio.run(collect(pages=1,channel='chromium'))
+        self.assertEqual(page.waits,1)
+        self.assertEqual(records,[])
+
+    def test_genuine_kudago_home_forbidden_is_not_a_transient_browser_error(self):
+        class BrowserError(Exception): pass
+        class Page:
+            url=''
+            async def goto(self,url,**kwargs):
+                self.url=url
+                return SimpleNamespace(status=403)
+            async def wait_for_selector(self,*args,**kwargs): raise BrowserError('no public cards')
+        class Context:
+            async def route(self,*args): pass
+            async def new_page(self): return Page()
+        class Browser:
+            async def new_context(self): return Context()
+            async def close(self): pass
+        class Chromium:
+            async def launch(self,**kwargs): return Browser()
+        class Playwright:
+            async def __aenter__(self): return SimpleNamespace(chromium=Chromium())
+            async def __aexit__(self,*args): pass
+        module=SimpleNamespace(async_playwright=Playwright,Error=BrowserError)
+        with patch.dict('sys.modules',{'playwright.async_api':module}):
+            with self.assertRaisesRegex(SyncError,'kudago_http_403'):
+                asyncio.run(collect(pages=1,channel='chromium'))
+
     def test_lost_response_reuses_batch_bytes(self):
         calls=[]
         def transport(request):
