@@ -10,7 +10,7 @@ import httpx
 
 from event_collector.collector_frontier import interleave, page_window
 from event_collector.yandex_afisha import detail_items, normalize
-from event_collector.yandex_collect import export, publish
+from event_collector.yandex_collect import export, publish, checked_detail_items
 from event_collector.source_http import SyncError
 from event_collector.kudago_html import card_destination
 
@@ -34,6 +34,25 @@ def html(data):
 
 
 class ExpansionContracts(unittest.TestCase):
+    def test_single_unconfirmed_detail_is_quarantined_without_weakening_identity(self):
+        diagnostic={}
+        self.assertIsNone(checked_detail_items(html(state()),'stale_listing_id',diagnostic,120))
+        self.assertEqual(diagnostic['detail_mismatches'],1)
+        self.assertEqual(diagnostic['skipped_detail_ids'],['stale_listing_id'])
+        self.assertEqual(len(checked_detail_items(html(state()),'event1',diagnostic,120)),2)
+        self.assertEqual(diagnostic['detail_mismatches'],1)
+
+    def test_widespread_detail_identity_mismatch_and_other_schema_errors_stay_fatal(self):
+        diagnostic={}
+        for n in range(4):
+            self.assertIsNone(checked_detail_items(html(state()),f'stale_{n}',diagnostic,120))
+        with self.assertRaisesRegex(SyncError,'yandex_detail_event_mismatch'):
+            checked_detail_items(html(state()),'stale_5',diagnostic,120)
+        with self.assertRaises(SyncError):
+            checked_detail_items('<html>Changed schema</html>','event1',{},120)
+        with self.assertRaisesRegex(SyncError,'yandex_detail_event_mismatch'):
+            checked_detail_items(html(state()),'stale',{},5)
+
     def test_moved_kudago_event_and_event_converted_to_place(self):
         url='https://kudago.com/msk/event/new-canonical-slug/'
         self.assertEqual(card_destination(url),url)

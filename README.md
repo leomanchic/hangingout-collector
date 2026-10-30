@@ -99,6 +99,11 @@ companion session: visitors follow the attribution link to confirm opening hours
   pages. Read explicit dated sessions attached to each event and venue from the
   public page, including theatre schedules and dated cinema/masterclass slots.
   Do not extrapolate daily/weekly summaries. Different venues keep separate IDs.
+  A listing link whose detail page does not confirm the same event ID is quarantined;
+  it never contributes sessions or fallback records. At most 10% of the planned
+  detail sample (and no more than four cards) may be skipped this way. More failures,
+  changed schemas and access challenges still stop the run. `detail_mismatches`
+  is included in the signed run metrics and source status.
 - Both cover the next 60 days, not the complete Moscow catalogue. At most 100
   nearest confirmed sessions are retained per event/venue per run. Missing cards are
   not treated as cancellations. Date ranges and venue opening hours are not showtimes.

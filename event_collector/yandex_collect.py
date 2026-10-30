@@ -23,6 +23,22 @@ from .common import ROOT
 from .protocol import ENDPOINT, MAX_BYTES, signature
 
 
+def checked_detail_items(html, event_id, diagnostics, detail_budget):
+    """Quarantine a few stale listing links; widespread identity drift stays fatal."""
+    try:
+        return detail_items(html, event_id)
+    except SyncError as exc:
+        if str(exc) != 'yandex_detail_event_mismatch':
+            raise
+        diagnostics['detail_mismatches'] = diagnostics.get('detail_mismatches', 0) + 1
+        diagnostics.setdefault('skipped_detail_ids', []).append(event_id)
+        # At most 10% of the planned detail sample and never more than four.
+        # No identity check is relaxed, and no fallback item is imported.
+        if diagnostics['detail_mismatches'] > min(4, detail_budget//10):
+            raise
+        return None
+
+
 async def browser_fetch(*, pages, channel, details=120, days=60):
     try:
         from playwright.async_api import async_playwright, Error as BrowserError
@@ -108,8 +124,12 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                         continue
                     await asyncio.sleep(1)
                     html = await load_page(url)
-                    batch = detail_items(html, item['event']['id'])
                     diagnostics['details'] += 1
+                    batch = checked_detail_items(html, item['event']['id'], diagnostics, min(details,len(candidates)))
+                    if batch is None:
+                        print(json.dumps({'progress':'skipped_detail','reason':'yandex_detail_event_mismatch',
+                                          'event_id':item['event']['id']}), flush=True)
+                        continue
                     if diagnostics['details'] % 30 == 0:
                         print(json.dumps({'progress':'details', 'pages':diagnostics['details']}), flush=True)
                     if batch:
