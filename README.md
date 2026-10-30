@@ -52,8 +52,27 @@ The separate `/api/collector-health` probe returns 503 when attention is needed;
 application health remains independent. Source freshness allows three hours,
 scheduler grace 45 minutes, and a stuck job 25 minutes. A greater than 70% drop
 against at least three prior scheduled runs of the same page band is flagged; manual diagnostic runs
-are excluded from that comparison. Incidents are retained locally; no messages
-or email are sent. A watchdog/API failure cannot produce a green status.
+are excluded from that comparison. A watchdog/API failure cannot produce a green status.
+
+The REG.RU monitor can recover missing/failed runs using a separate fine-grained
+GitHub token scoped to this repository with Actions write permission. The token
+stays outside the web root and is never provided to collectors. Recovery dispatches
+select only the affected source and include a unique `recovery_key`. Persistent
+reservations prevent overlapping monitor processes from launching the same attempt;
+ambiguous dispatches are reconciled using the run title and signed start receipt.
+Each incident permits at most two recovery attempts with a 20-minute cooldown;
+an ordinary transient source failure first waits ten minutes. Active GitHub jobs
+are allowed to finish. Disabled workflows are not automatically re-enabled.
+
+Late recovery jobs skip collection when a newer complete publication has already
+satisfied the incident. Only verified ingestion receipts resolve a recovery;
+GitHub accepting a dispatch or a green job without delivery does not suffice.
+Short network/429/5xx failures have bounded request retries. Batch retries reuse
+the same ID and bytes, so a lost response cannot import a batch twice. CAPTCHA,
+permission, schema and unknown failures stop additional automatic retries.
+The monitor optionally queues one private owner alert per incident and one recovery
+message through the existing Telegram outbox. Collector jobs never receive Telegram
+credentials. Normal event expiration and duplicate checks remain server-side.
 
 Bounded multi-day KudaGO visiting periods have their own date-only schema and
 an explicit estimated label. They expire after the final Moscow calendar day,

@@ -16,7 +16,7 @@ import uuid
 
 import httpx
 
-from .source_http import SyncError
+from .source_http import SyncError, retry_delay
 from .yandex_afisha import ORIGIN, LISTINGS, normalize, parse_page, detail_items
 from .collector_frontier import page_window, interleave
 from .common import ROOT
@@ -39,16 +39,22 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                     # We parse the HTTP response body, not the hydrated DOM.
                     # Waiting for page scripts can time out even when HTML is ready.
                     response = None
-                    for attempt in range(2):
+                    for attempt in range(3):
                         try:
                             response = await page.goto(url, wait_until="commit", timeout=25_000)
+                            if response is not None and (response.status == 429 or response.status >= 500):
+                                delay = retry_delay(response.headers, attempt)
+                                if attempt == 2 or delay is None:
+                                    raise SyncError(f'http_{response.status}' + ('_retry_later' if delay is None else ''))
+                                await asyncio.sleep(delay)
+                                continue
                             break
                         except BrowserError:
                             if 'captcha' in page.url.lower():
                                 raise SyncError('yandex_captcha_required') from None
-                            if attempt:
+                            if attempt == 2:
                                 raise SyncError('yandex_navigation_timeout_or_network') from None
-                            await asyncio.sleep(3)
+                            await asyncio.sleep(2 ** attempt)
                     if "captcha" in page.url.lower():
                         raise SyncError("yandex_captcha_required")
                     permitted_alias = (urlsplit(url).path == '/moscow/selections/all-events-theatre'
@@ -204,24 +210,38 @@ def publish_batch(records, key_file, *, client=None, source="yandex"):
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(body) > MAX_BYTES:
         raise SyncError("batch_too_large")
-    stamp = str(int(time.time()))
-    headers = {"Content-Type": "application/json", "X-Collector-Time": stamp,
-               "X-Collector-Signature": signature(secret, stamp, body)}
     owned = client is None
     client = client or httpx.Client(timeout=30, follow_redirects=False)
     try:
         # A fixed HTTPS destination, TLS verification enabled, no redirected POSTs.
         endpoint = ENDPOINT if source == "yandex" else "/api/internal/collector/kudago"
-        response = client.post("https://hangingout.ru" + endpoint, content=body, headers=headers, follow_redirects=False)
-        if response.status_code != 200:
-            raise SyncError(f"publish_http_{response.status_code}")
-        result = response.json()
-        if (result.get("status") != "ok" or result.get("source") != source
-                or result.get("imported") != len(records)):
-            raise SyncError("publish_invalid_receipt")
-        return result
-    except (httpx.HTTPError, ValueError, AttributeError):
-        raise SyncError("publish_network_or_response_error") from None
+        for attempt in range(3):
+            stamp = str(int(time.time()))
+            headers = {"Content-Type": "application/json", "X-Collector-Time": stamp,
+                       "X-Collector-Signature": signature(secret, stamp, body)}
+            try:
+                # The exact same batch ID and bytes survive ambiguous responses.
+                # The server returns its stored receipt, without importing twice.
+                response = client.post("https://hangingout.ru" + endpoint, content=body, headers=headers, follow_redirects=False)
+                if response.status_code == 429 or response.status_code >= 500:
+                    delay = retry_delay(response.headers, attempt)
+                    if attempt == 2 or delay is None:
+                        raise SyncError(f'publish_http_{response.status_code}' + ('_retry_later' if delay is None else ''))
+                    time.sleep(delay)
+                    continue
+                if response.status_code != 200:
+                    raise SyncError(f"publish_http_{response.status_code}")
+                result = response.json()
+                if (result.get("status") != "ok" or result.get("source") != source
+                        or result.get("imported") != len(records)):
+                    raise SyncError("publish_invalid_receipt")
+                return result
+            except httpx.TransportError:
+                if attempt == 2:
+                    raise SyncError('publish_network_or_response_error') from None
+                time.sleep(2 ** attempt)
+            except (httpx.HTTPError, ValueError, AttributeError):
+                raise SyncError("publish_network_or_response_error") from None
     finally:
         if owned:
             client.close()

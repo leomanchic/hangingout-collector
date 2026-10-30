@@ -10,7 +10,7 @@ import time
 
 from .common import ROOT
 from .kudago_html import LISTINGS, ORIGIN, listing_links, normalize, event_url, card_destination
-from .source_http import SyncError
+from .source_http import SyncError, retry_delay
 from .yandex_collect import publish
 from .collector_frontier import page_window, interleave
 
@@ -29,7 +29,26 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                 page = await context.new_page()
 
                 async def load(url, *, home=False, raw=False, card=False):
-                    response = await page.goto(url, wait_until="domcontentloaded", timeout=25_000)
+                    for attempt in range(3):
+                        try:
+                            response = await page.goto(url, wait_until="domcontentloaded", timeout=25_000)
+                            if 'captcha' in page.url.lower():
+                                raise SyncError('kudago_captcha_required')
+                            if response is not None and (response.status == 429 or response.status >= 500):
+                                delay = retry_delay(response.headers, attempt)
+                                if attempt == 2 or delay is None:
+                                    raise SyncError(f'kudago_http_{response.status}' + ('_retry_later' if delay is None else ''))
+                                await asyncio.sleep(delay)
+                                continue
+                            break
+                        except BrowserError:
+                            if 'captcha' in page.url.lower():
+                                raise SyncError('kudago_captcha_required') from None
+                            if attempt == 2:
+                                raise SyncError('kudago_browser_navigation_failed') from None
+                            await asyncio.sleep(2 ** attempt)
+                    if response is not None and response.status in {401, 403}:
+                        raise SyncError(f'kudago_http_{response.status}')
                     # The public site may run its own JS on first visit. No CAPTCHA
                     # solving, cookie extraction, proxy rotation or stealth patches.
                     if home:

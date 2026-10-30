@@ -1,4 +1,5 @@
 name: Collect Moscow events
+run-name: Collect ${{ inputs.source || 'all' }}${{ inputs.recovery_key != '' && format(' recovery {0}', inputs.recovery_key) || '' }}
 
 on:
   schedule:
@@ -14,6 +15,10 @@ on:
         description: Maximum KudaGO cards (20 for a quick diagnostic, 300 normally)
         type: string
         default: '300'
+      recovery_key:
+        description: Recovery attempt identifier (set by the REG.RU monitor)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -24,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: [kudago, yandex]
+        source: ${{ fromJSON(inputs.source == 'kudago' && '["kudago"]' || inputs.source == 'yandex' && '["yandex"]' || '["kudago","yandex"]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     concurrency:
@@ -51,4 +56,5 @@ jobs:
           COLLECTOR_SECRET: ${{ secrets.COLLECTOR_SECRET }}
           COLLECTOR_SOURCE: ${{ matrix.source }}
           KUDAGO_LIMIT: ${{ inputs.kudago_limit || '300' }}
+          COLLECTOR_RECOVERY_KEY: ${{ inputs.recovery_key }}
         run: python run_collector.py

@@ -1,0 +1,79 @@
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import httpx
+
+from event_collector.source_http import SyncError, retry_delay
+from event_collector.yandex_collect import publish
+from event_collector.collector_report import report_run
+import run_collector
+
+
+class RecoveryContracts(unittest.TestCase):
+    def test_lost_response_reuses_batch_bytes(self):
+        calls=[]
+        def transport(request):
+            calls.append(request)
+            if len(calls)==1:
+                raise httpx.ReadTimeout('synthetic',request=request)
+            return httpx.Response(200,json={'status':'ok','source':'yandex','imported':1,'added':1})
+        with tempfile.TemporaryDirectory() as folder:
+            key=Path(folder)/'key';key.write_text('a'*64,encoding='ascii')
+            with httpx.Client(transport=httpx.MockTransport(transport)) as client, patch('time.sleep'):
+                self.assertEqual(publish([{}],key,client=client)['imported'],1)
+        self.assertEqual(len(calls),2)
+        self.assertEqual(calls[0].content,calls[1].content)
+
+    def test_permanent_error_and_long_retry_after_stop(self):
+        for code,headers in ((403,{}),(429,{'Retry-After':'3600'})):
+            calls=[]
+            def transport(request):
+                calls.append(request)
+                return httpx.Response(code,headers=headers)
+            with tempfile.TemporaryDirectory() as folder:
+                key=Path(folder)/'key';key.write_text('a'*64,encoding='ascii')
+                with httpx.Client(transport=httpx.MockTransport(transport)) as client, patch('time.sleep') as sleep:
+                    with self.assertRaises(SyncError): publish([{}],key,client=client)
+                    sleep.assert_not_called()
+            self.assertEqual(len(calls),1)
+
+    def test_transient_errors_have_a_hard_cap(self):
+        calls=[]
+        def transport(request):
+            calls.append(request)
+            return httpx.Response(503,headers={'Retry-After':'4'})
+        with tempfile.TemporaryDirectory() as folder:
+            key=Path(folder)/'key';key.write_text('a'*64,encoding='ascii')
+            with httpx.Client(transport=httpx.MockTransport(transport)) as client, patch('time.sleep') as sleep:
+                with self.assertRaisesRegex(SyncError,'publish_http_503'): publish([{}],key,client=client)
+                self.assertEqual([c.args for c in sleep.call_args_list],[(4,),(4,)])
+        self.assertEqual(len(calls),3)
+
+    def test_retry_after_http_dates_and_invalid_values(self):
+        self.assertIsNone(retry_delay({'Retry-After':'Wed, 01 Jan 2098 00:00:00 GMT'},0))
+        self.assertIsNone(retry_delay({'Retry-After':'invalid'},0))
+        self.assertEqual(retry_delay({'Retry-After':'Wed, 01 Jan 2020 00:00:00 GMT'},0),0)
+
+    def test_late_recovery_does_not_start_browser(self):
+        with patch.dict('os.environ',{'COLLECTOR_SOURCE':'kudago','COLLECTOR_SECRET':'a'*64,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1','GITHUB_EVENT_NAME':'workflow_dispatch','COLLECTOR_RECOVERY_KEY':'b'*32}), patch('run_collector.report_run',return_value='skip'), patch('subprocess.run') as child, patch('builtins.print'):
+            self.assertEqual(run_collector.main(),0)
+            child.assert_not_called()
+
+    def test_recovery_identifier_sent_in_signed_run_receipt(self):
+        captured=[]
+        def post(url,**kwargs):
+            captured.append(json.loads(kwargs['content']))
+            return httpx.Response(200,json={'status':'skip','run_key':'12345.1','source':'yandex'})
+        with tempfile.TemporaryDirectory() as folder:
+            key=Path(folder)/'key';key.write_text('a'*64,encoding='ascii')
+            with patch.dict('os.environ',{'COLLECTOR_RECOVERY_KEY':'b'*32}), patch('httpx.post',side_effect=post):
+                self.assertEqual(report_run(key,'12345.1','yandex','workflow_dispatch','running'),'skip')
+        self.assertEqual(captured[0]['recovery_key'],'b'*32)
+        self.assertNotIn('a'*64,json.dumps(captured))
+
+
+if __name__=='__main__':
+    unittest.main()

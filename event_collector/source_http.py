@@ -2,12 +2,26 @@
 import asyncio
 from html.parser import HTMLParser
 import json
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 
 
 class SyncError(Exception):
     """Only safe operator-facing codes, never response bodies or credentials."""
+
+
+def retry_delay(headers, attempt, *, maximum=30):
+    """Respect Retry-After, including HTTP dates; never shorten a long server wait."""
+    value = headers.get('retry-after', headers.get('Retry-After'))
+    if value is None:
+        return min(2 ** attempt, maximum)
+    try:
+        delay = int(value) if value.isdigit() else (parsedate_to_datetime(value)-datetime.now(timezone.utc)).total_seconds()
+        return max(0, delay) if delay <= maximum else None
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        return None
 
 
 class PlainText(HTMLParser):

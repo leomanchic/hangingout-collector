@@ -32,7 +32,9 @@ def main():
             stream.write(secret)
         secret = None
         try:
-            report_run(key_file,run_key,source,trigger,'running')
+            if report_run(key_file,run_key,source,trigger,'running') == 'skip':
+                print('Recovery already satisfied by a complete newer publication; collection skipped.')
+                return 0
             extra = ['--limit', limit] if source == 'kudago' else []
             result = subprocess.run([sys.executable, "-m", f"event_collector.{source}_collect", *extra,
                                      "--channel", "chromium", "--publish", "--key-file", str(key_file)],
@@ -58,8 +60,10 @@ def main():
             report_run(key_file,run_key,source,trigger,'success',metrics)
             print('Complete run and all published batches acknowledged.')
             return 0
-        except (subprocess.TimeoutExpired,RuntimeError,OSError):
-            try: report_run(key_file,run_key,source,trigger,'failed')
+        except (subprocess.TimeoutExpired,RuntimeError,OSError) as exc:
+            error_code = ('collector_timeout' if isinstance(exc, subprocess.TimeoutExpired) else
+                          'run_receipt_unavailable' if isinstance(exc, RuntimeError) else 'collector_process_failed')
+            try: report_run(key_file,run_key,source,trigger,'failed',{'error_code':error_code})
             except RuntimeError: pass
             print("Collector or run reporting failed. Check the watchdog; existing catalogue is preserved.")
             return 1
