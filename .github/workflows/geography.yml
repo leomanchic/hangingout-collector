@@ -1,0 +1,26 @@
+name: Refresh Moscow district boundaries
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Download public OpenStreetMap boundaries
+        shell: python
+        run: |
+          import base64, gzip, json, urllib.request, urllib.parse
+          query = '[out:json][timeout:90];area(3600102269)->.moscow;relation[boundary=administrative][admin_level=8](area.moscow);out geom;'
+          request = urllib.request.Request('https://overpass-api.de/api/interpreter',
+              data=urllib.parse.urlencode({'data':query}).encode(),
+              headers={'User-Agent':'Hangingout/1.0 (https://hangingout.ru)'})
+          with urllib.request.urlopen(request, timeout=120) as response:
+              data = response.read(12000000)
+          value = json.loads(data)
+          assert 100 <= len(value['elements']) <= 200, 'Unexpected district count'
+          packed = base64.b64encode(gzip.compress(data)).decode()
+          # Public geographic data only. No secrets, browser state or user data.
+          for i in range(0,len(packed),3000):
+              print('OSM_SNAPSHOT:'+packed[i:i+3000])
