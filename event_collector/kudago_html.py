@@ -1,9 +1,10 @@
 """Read public KudaGO cards. Date ranges/opening hours are never showtimes."""
 from datetime import datetime, timezone
 from html.parser import HTMLParser
+from html import unescape
 import json
 import re
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, parse_qs
 
 from .common import SOURCE, ZONE
 from .models import EventImport
@@ -14,6 +15,28 @@ LISTINGS = ("/msk/concerts/", "/msk/theater/", "/msk/knowledge/",
             "/msk/exhibitions/", "/msk/excursions/", "/msk/kino/")
 MONTHS = "января февраля марта апреля мая июня июля августа сентября октября ноября декабря".split()
 VOID = set("area base br col embed hr img input link meta param source track wbr".split())
+
+
+def location_fields(location):
+    if not isinstance(location, dict): return None
+    geo = location.get('geo')
+    geo = [geo] if isinstance(geo, dict) else geo
+    if not isinstance(geo, list) or len(geo) != 1 or not isinstance(geo[0], dict): return None
+    try:
+        lat, lon = float(geo[0]['latitude']), float(geo[0]['longitude'])
+        # Observed KudaGO JSON-LD has transposed labels. Correct only when the
+        # same venue's static-map point explicitly corroborates lon,lat order.
+        if not (54 < lat < 57 and 35 < lon < 40):
+            url = urlsplit(unescape(location.get('hasMap', '')))
+            point = parse_qs(url.query).get('pt', [''])[0].split(',')
+            if url.hostname != 'static-maps.yandex.ru' or len(point) < 2: return None
+            if abs(float(point[0])-lat)>1e-6 or abs(float(point[1])-lon)>1e-6: return None
+            lat, lon = lon, lat
+        if 54 < lat < 57 and 35 < lon < 40:
+            return dict(latitude=lat, longitude=lon, metro=[])
+    except (ValueError, TypeError, KeyError):
+        pass
+    return None
 
 
 class Node:
@@ -212,5 +235,6 @@ def normalize(html, url, since, until):
                   city="Москва", category=category, venue=next(iter(venues)), address=next(iter(addresses)),
                   price=price, price_text=price_text, source_name=SOURCE, source_url=url,
                   source_event_id=next(iter(ids)), source_updated_at=None,
+                  source_location=location_fields(location),
                   occurrences=sorted(occurrences.values(), key=lambda o: o["starts_at"])[:100],period=period)
     return EventImport.model_validate(record).model_dump(), None

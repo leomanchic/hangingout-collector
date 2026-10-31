@@ -57,6 +57,12 @@ def resolve(state, value):
     return value
 
 
+def located_place(state, value):
+    place = dict(resolve(state, value) or {})
+    place['metro'] = [resolve(state, m) for m in place.get('metro') or []]
+    return place
+
+
 def read_state(html):
     """Extract JSON-like state without executing any page-provided code."""
     if len(html.encode("utf-8")) > 8_000_000:
@@ -93,7 +99,7 @@ def parse_page(html, *, page=1, path=PATH):
                 schedule = resolve(state, value.get("scheduleInfo"))
                 if not isinstance(event, dict) or not isinstance(schedule, dict):
                     raise SyncError("yandex_invalid_event_schema")
-                place = resolve(state, schedule.get("onlyPlace")) or {}
+                place = located_place(state, schedule.get("onlyPlace"))
                 city = resolve(state, place.get("city")) or {}
                 items.append({"event": event, "schedule": schedule, "place": place, "city": city})
             else:
@@ -131,7 +137,7 @@ def detail_items(html, expected_event_id):
         value = session.get("datetime")
         if not isinstance(value, str) or not value.startswith(day + "T"):
             return
-        place = resolve(state, place_ref) or {}
+        place = located_place(state, place_ref)
         city = resolve(state, place.get("city")) or {}
         key = (place.get("id"), value)
         if key in seen:
@@ -242,6 +248,11 @@ def normalize(item, since, until):
                   source_movie_id=eid if category == 'cinema' else None,
                   occurrences=[dict(id=f"t{int(start.timestamp())}",
                                     starts_at=start.astimezone(timezone.utc).isoformat(), timezone="Europe/Moscow")])
+    coords = place.get('coordinates') or {}
+    record['source_location'] = dict(
+        metro=sorted({clean(m.get('name'), 80) for m in place.get('metro') or []
+                      if isinstance(m, dict) and clean(m.get('name'), 80)}),
+        latitude=coords.get('latitude'), longitude=coords.get('longitude'))
     return EventImport.model_validate(record).model_dump(), None
 
 

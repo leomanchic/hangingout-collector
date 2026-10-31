@@ -16,6 +16,18 @@ import run_collector
 
 
 class CollectorContracts(unittest.TestCase):
+    def test_source_location_contract_and_kudago_transposed_coordinates(self):
+        from event_collector.models import SourceLocation
+        from event_collector.kudago_html import location_fields
+        from event_collector.yandex_afisha import located_place
+        self.assertEqual(SourceLocation(metro=[' Арбатская ','Арбатская']).metro,['Арбатская'])
+        place=located_place({'Metro:1':{'name':'Арбатская'}},{'metro':[{'__ref':'Metro:1'}]})
+        self.assertEqual(place['metro'][0]['name'],'Арбатская')
+        self.assertIsNone(location_fields({'geo':[{'latitude':37.6,'longitude':55.7}]}))
+        loc=location_fields({'geo':[{'latitude':37.6,'longitude':55.7}],
+            'hasMap':'//static-maps.yandex.ru/1.x/?pt=37.6,55.7,vkbkm'})
+        self.assertEqual(loc['latitude'],55.7)
+
     def test_all_modules_import_without_server(self):
         for name in ('models','source_http','kudago_html','kudago_collect','yandex_afisha','yandex_collect'):
             importlib.import_module('event_collector.' + name)

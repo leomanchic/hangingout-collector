@@ -48,6 +48,17 @@ class PeriodInput(Input):
         return self
 
 
+class SourceLocation(Input):
+    metro: list[str] = Field(default_factory=list, max_length=12)
+    latitude: float | None = Field(default=None, ge=-90, le=90, allow_inf_nan=False)
+    longitude: float | None = Field(default=None, ge=-180, le=180, allow_inf_nan=False)
+
+    @field_validator('metro')
+    @classmethod
+    def station_names(cls, values):
+        return sorted({v.strip() for v in values if 1 <= len(v.strip()) <= 80})
+
+
 class EventImport(Input):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=5000)
@@ -61,6 +72,7 @@ class EventImport(Input):
     source_url: str = Field(pattern=r"^https?://[^\s]+$", max_length=2000)
     source_event_id: str = Field(min_length=1, max_length=100)
     source_movie_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,48}$")
+    source_location: SourceLocation | None = None
     source_updated_at: str | None = None
     occurrences: list[OccurrenceInput] = Field(default_factory=list, max_length=100)
     period: PeriodInput | None = None
