@@ -57,7 +57,7 @@ def run_probe():
                                    if (r := yandex_normalize(item, since, until)[0])]
                     row['accepted_cards'] = len({r['source_event_id'] for r in records})
                     row['sessions'] = sum(len(r.get('occurrences', [])) for r in records)
-                    row['periods'] = sum(len(r.get('periods', [])) for r in records)
+                    row['periods'] = sum(r.get('period') is not None for r in records)
                 elif source == 'kudago':
                     parsed = listing_links(html)
                     row['items'] = len(parsed)
