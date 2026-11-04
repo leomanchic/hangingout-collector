@@ -178,6 +178,43 @@ timings. They contain no raw source HTML or browser state. The workflow receives
 no ingestion credentials and publication functions are explicitly disabled.
 An unsuccessful collection fails the job while preserving available diagnostics.
 
+### Measured decision, 2026-11-04
+
+[Full paired run 41851636054](https://github.com/leomanchic/hangingout-collector/actions/runs/41851636054)
+used commit `17a57b5d943d9a9d3f1e9eafe75cff5d363a9acc`. All 47 offline
+tests passed. The measured candidate is the hybrid adapter in `benchmark_loader.py`,
+not every possible configuration of Scrapling. Production remains on Playwright.
+
+| Source / page band | Playwright seconds; accepted records | Hybrid Scrapling seconds; accepted records |
+| --- | --- | --- |
+| KudaGO 1/2/3/4 | 835.3; 169 | 900.4; timeout, no complete result |
+| KudaGO 1/5/6/7 | 620.4; 91 | 762.5; 88 |
+| Yandex 1/2/3/4 | 295.7; 304 | 310.4; 307 |
+| Yandex 1/5/6/7 | 289.9; 253 | 287.8; 252 |
+
+Records identify an event and venue; these are not newly added site cards.
+All benchmark runs were unpublished. The workflow is red because the first
+KudaGO candidate timed out; the separate production jobs succeeded.
+
+The completed KudaGO candidate was 22.9% slower. Its 21 estimated periods
+matched the baseline. Yandex used only four browser navigations instead of
+144-145, but had no consistent elapsed-time gain. One candidate detail had an
+event identity mismatch: the existing quarantine rejected its 56 sessions and
+allowed the rest of the collection to complete. A later local two-loader check
+returned the correct identity and 56 sessions; that check used a different IP/time
+and does not explain the transient CI response.
+
+Live listings changed during the paired runs, so differences in accepted IDs are
+not proof of parser loss. Yandex event-ID overlap was 97.7% and 98.0%; the second
+pair retained every baseline session among IDs common to both runs. The candidate
+does not yet justify replacing the production loader.
+
+A concrete coverage limit remains: Yandex inspected 120 details with 105-115
+additional candidates still pending; KudaGO's first baseline inspected 300 of
+496 discovered cards. A persistent queue across hourly runs is the next priority,
+while retaining freshness checks and bounded request rates. Pending candidates
+still need date and venue validation before they can become accepted events.
+
 ## References
 
 - [GitHub scheduled workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
