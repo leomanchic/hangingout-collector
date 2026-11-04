@@ -99,15 +99,18 @@ companion session: visitors follow the attribution link to confirm opening hours
   pages. Read explicit dated sessions attached to each event and venue from the
   public page, including theatre schedules and dated cinema/masterclass slots.
   Do not extrapolate daily/weekly summaries. Different venues keep separate IDs.
-  A listing link whose detail page does not confirm the same event ID is quarantined;
-  it never contributes sessions or fallback records. At most 10% of the planned
-  detail sample (and no more than four cards) may be skipped this way. More failures,
-  changed schemas and access challenges still stop the run. `detail_mismatches`
+  Bad UTF-8 responses are retried once, within the three-attempt network limit.
+  Isolated undecodable, removed (404/410) or identity-mismatched detail pages are
+  quarantined; they never contribute sessions or fallback records. All these
+  failures share one budget: at most 10% of the actual detail sample, capped at
+  four cards. More failures, listing failures, changed schemas and access
+  challenges still stop the run. `detail_failure_reasons` and `detail_partial`
+  are logged; a partial detail sample produces an Actions warning. `detail_mismatches`
   is included in the signed run metrics and source status.
 - Both cover the next 60 days, not the complete Moscow catalogue. At most 100
   nearest confirmed sessions are retained per event/venue per run. Missing cards are
   not treated as cancellations. Date ranges and venue opening hours are not showtimes.
-- Browser sessions are isolated. No saved personal cookies, CAPTCHA solving, stealth
+- Production browser sessions are isolated. No saved personal cookies, CAPTCHA solving, stealth
   patches or proxy rotation. If a source blocks a runner, the job fails and the
   existing server catalogue is preserved.
 - Source attribution links are retained. Articles and photographs are not republished.
@@ -124,6 +127,17 @@ For local development: Python 3.12, `pip install -r requirements.txt`, then
 `python -m playwright install chromium`. Collect without publishing using
 `python -m event_collector.kudago_collect --channel chromium` or the equivalent
 `event_collector.yandex_collect`. Generated data is ignored by Git.
+
+## Read-only Scrapling experiment
+
+The separate manual **Scrapling read-only probe** workflow tests Scrapling 0.5
+HTTP and browser loaders on one listing and at most one detail per source and
+transport. KudaGO API access is also checked. Existing parsers and date/identity
+validation are used. Results and failures appear in logs and the job summary.
+The experiment has no ingestion secret and never publishes data. Its dependencies
+are isolated in `requirements-probe.txt`; production remains on Playwright.
+The browser probe uses Scrapling's browser patches, without saved user state,
+proxies or CAPTCHA solving. One successful sample is not a reliability benchmark.
 
 ## References
 

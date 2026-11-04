@@ -6,8 +6,10 @@ import argparse
 import asyncio
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
+import re
 from urllib.parse import urljoin, urlsplit
 import sys
 import tempfile
@@ -23,20 +25,87 @@ from .common import ROOT
 from .protocol import ENDPOINT, MAX_BYTES, signature
 
 
+DETAIL_SKIPPABLE_ERRORS = frozenset({
+    'yandex_detail_event_mismatch', 'yandex_invalid_encoding', 'http_404', 'http_410',
+})
+
+
+def quarantine_detail(error, event_id, diagnostics, detail_budget):
+    """One shared, bounded budget; never turn a failed detail into a fallback item."""
+    reason = str(error)
+    if reason not in DETAIL_SKIPPABLE_ERRORS:
+        raise error
+    total = diagnostics.get('detail_failures', 0) + 1
+    diagnostics['detail_failures'] = total
+    reasons = diagnostics.setdefault('detail_failure_reasons', {})
+    reasons[reason] = reasons.get(reason, 0) + 1
+    if reason == 'yandex_detail_event_mismatch':
+        diagnostics['detail_mismatches'] = diagnostics.get('detail_mismatches', 0) + 1
+    diagnostics.setdefault('skipped_detail_ids', []).append(event_id)
+    limit = min(4, detail_budget // 10)
+    print(json.dumps({'progress': 'skipped_detail', 'reason': reason,
+                      'event_id': event_id, 'detail_failures': total,
+                      'limit': limit, 'budget_exceeded': total > limit}), flush=True)
+    if total > limit:
+        raise error
+
+
 def checked_detail_items(html, event_id, diagnostics, detail_budget):
-    """Quarantine a few stale listing links; widespread identity drift stays fatal."""
+    """Quarantine isolated identity drift while retaining strict parsing checks."""
     try:
         return detail_items(html, event_id)
     except SyncError as exc:
-        if str(exc) != 'yandex_detail_event_mismatch':
-            raise
-        diagnostics['detail_mismatches'] = diagnostics.get('detail_mismatches', 0) + 1
-        diagnostics.setdefault('skipped_detail_ids', []).append(event_id)
-        # At most 10% of the planned detail sample and never more than four.
-        # No identity check is relaxed, and no fallback item is imported.
-        if diagnostics['detail_mismatches'] > min(4, detail_budget//10):
-            raise
+        quarantine_detail(exc, event_id, diagnostics, detail_budget)
         return None
+
+
+async def load_browser_page(page, url, browser_error):
+    """Read strict UTF-8, retry a bad body once; logs exclude bodies and URL queries."""
+    decode_failures = 0
+    for attempt in range(3):
+        try:
+            response = await page.goto(url, wait_until='commit', timeout=25_000)
+            if 'captcha' in page.url.lower():
+                raise SyncError('yandex_captcha_required')
+            permitted_alias = (urlsplit(url).path == '/moscow/selections/all-events-theatre'
+                               and urlsplit(page.url).path == '/moscow/selections/spectacle'
+                               and urlsplit(page.url).netloc == 'afisha.yandex.ru')
+            if page.url != url and not permitted_alias:
+                raise SyncError('yandex_unexpected_redirect')
+            if response is not None and (response.status == 429 or response.status >= 500):
+                delay = retry_delay(response.headers, attempt)
+                if attempt == 2 or delay is None:
+                    raise SyncError(f'http_{response.status}' + ('_retry_later' if delay is None else ''))
+                await asyncio.sleep(delay)
+                continue
+            if response is None or response.status != 200:
+                raise SyncError(f'http_{response.status if response else "missing"}')
+            body = await response.body()
+            if len(body) > 8_000_000:
+                raise SyncError('page_too_large')
+            try:
+                return body.decode('utf-8')
+            except UnicodeDecodeError as exc:
+                decode_failures += 1
+                charset = re.search(r'charset\s*=\s*["\x27]?([a-zA-Z0-9_-]{1,32})',
+                                    response.headers.get('content-type', ''), re.I)
+                encoding = response.headers.get('content-encoding', '').lower()
+                print(json.dumps({'progress': 'page_decode_failed',
+                                  'path': urlsplit(url).path[:240], 'attempt': attempt + 1,
+                                  'bytes': len(body), 'invalid_byte_offset': exc.start,
+                                  'body_sha256': hashlib.sha256(body).hexdigest()[:16],
+                                  'gzip_magic': body.startswith(b'\x1f\x8b'),
+                                  'charset': charset[1].lower() if charset else 'unspecified',
+                                  'content_encoding': encoding if encoding in {'', 'gzip', 'br', 'deflate', 'zstd', 'identity'} else 'other'}), flush=True)
+                if decode_failures >= 2 or attempt == 2:
+                    raise SyncError('yandex_invalid_encoding') from None
+                await asyncio.sleep(2 ** attempt)
+        except browser_error:
+            if 'captcha' in page.url.lower():
+                raise SyncError('yandex_captcha_required') from None
+            if attempt == 2:
+                raise SyncError('yandex_navigation_timeout_or_network') from None
+            await asyncio.sleep(2 ** attempt)
 
 
 async def browser_fetch(*, pages, channel, details=120, days=60):
@@ -52,41 +121,7 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                 await page.route('**/*', lambda route: route.abort() if route.request.resource_type in {'image','media','font'} else route.continue_())
 
                 async def load_page(url):
-                    # We parse the HTTP response body, not the hydrated DOM.
-                    # Waiting for page scripts can time out even when HTML is ready.
-                    response = None
-                    for attempt in range(3):
-                        try:
-                            response = await page.goto(url, wait_until="commit", timeout=25_000)
-                            if response is not None and (response.status == 429 or response.status >= 500):
-                                delay = retry_delay(response.headers, attempt)
-                                if attempt == 2 or delay is None:
-                                    raise SyncError(f'http_{response.status}' + ('_retry_later' if delay is None else ''))
-                                await asyncio.sleep(delay)
-                                continue
-                            break
-                        except BrowserError:
-                            if 'captcha' in page.url.lower():
-                                raise SyncError('yandex_captcha_required') from None
-                            if attempt == 2:
-                                raise SyncError('yandex_navigation_timeout_or_network') from None
-                            await asyncio.sleep(2 ** attempt)
-                    if "captcha" in page.url.lower():
-                        raise SyncError("yandex_captcha_required")
-                    permitted_alias = (urlsplit(url).path == '/moscow/selections/all-events-theatre'
-                                       and urlsplit(page.url).path == '/moscow/selections/spectacle'
-                                       and urlsplit(page.url).netloc == 'afisha.yandex.ru')
-                    if page.url != url and not permitted_alias:
-                        raise SyncError("yandex_unexpected_redirect")
-                    if response is None or response.status != 200:
-                        raise SyncError(f"http_{response.status if response else 'missing'}")
-                    body = await response.body()
-                    if len(body) > 8_000_000:
-                        raise SyncError("page_too_large")
-                    try:
-                        return body.decode("utf-8")
-                    except UnicodeError:
-                        raise SyncError("yandex_invalid_encoding") from None
+                    return await load_browser_page(page, url, BrowserError)
 
                 groups, diagnostics = [], {"listing_pages": 0, "details": 0, "lanes": {}, "page_window": page_window(pages)}
                 for category, path in LISTINGS.items():
@@ -123,12 +158,14 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                             or not parsed.path.startswith('/moscow/') or parsed.query or parsed.fragment):
                         continue
                     await asyncio.sleep(1)
-                    html = await load_page(url)
                     diagnostics['details'] += 1
+                    try:
+                        html = await load_page(url)
+                    except SyncError as exc:
+                        quarantine_detail(exc, item['event']['id'], diagnostics, min(details, len(candidates)))
+                        continue
                     batch = checked_detail_items(html, item['event']['id'], diagnostics, min(details,len(candidates)))
                     if batch is None:
-                        print(json.dumps({'progress':'skipped_detail','reason':'yandex_detail_event_mismatch',
-                                          'event_id':item['event']['id']}), flush=True)
                         continue
                     if diagnostics['details'] % 30 == 0:
                         print(json.dumps({'progress':'details', 'pages':diagnostics['details']}), flush=True)
@@ -138,6 +175,10 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                         items.append(item)
                 diagnostics['discovered'] = len(discovered)
                 diagnostics['detail_budget_remaining'] = max(0, len(candidates) - details)
+                # Malformed listing URLs must not inflate the permitted skip ratio.
+                if diagnostics.get('detail_failures', 0) > min(4, diagnostics['details'] // 10):
+                    raise SyncError('yandex_detail_error_budget_exceeded')
+                diagnostics['detail_partial'] = bool(diagnostics.get('detail_failures'))
                 return items, diagnostics
             finally:
                 await browser.close()

@@ -53,6 +53,9 @@ def main():
                 report_run(key_file,run_key,source,trigger,'failed',{'error_code':error_code})
                 print('Collector failed: '+error_code+'. Existing catalogue preserved.')
                 return 1
+            skipped = summary.get('discovery', {}).get('detail_failures', 0)
+            if isinstance(skipped, int) and skipped > 0:
+                print(f'::warning::Published verified events; {skipped} detail pages quarantined. See detail_failure_reasons in collection diagnostics.')
             metrics={k:receipt.get(k,0) for k in ('batches','imported','sessions','periods','added')}
             metrics.update({k:summary.get(k,summary.get('discovery',{}).get(k,0)) for k in ('discovered','fetched')})
             metrics['detail_mismatches'] = summary.get('discovery',{}).get('detail_mismatches',0)
