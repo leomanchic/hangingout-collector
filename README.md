@@ -167,6 +167,8 @@ The candidate first uses Scrapling HTTP, falling back to an isolated browser
 when required. A 403 switches that host to browser mode for the rest of the run.
 429 and server errors retain the existing collector retry/backoff policy.
 Parsing, source identity, dates, deduplication and request pacing are unchanged.
+Original document bytes are retained separately from the hydrated DOM, matching
+the existing pagination and strict UTF-8 response parsing.
 No cookies, proxies or CAPTCHA solver are supplied. The transport adapter only
 exists in an isolated benchmark process; production is not switched by this test.
 

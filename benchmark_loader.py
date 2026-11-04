@@ -72,7 +72,7 @@ class HybridPage:
         return Response(result)
 
     async def content(self):
-        return self.response.body.decode('utf-8')
+        return getattr(self.response,'dom_body',self.response.body).decode('utf-8')
 
     async def wait_for_selector(self, selector, **kwargs):
         if not self.response.css(selector):
@@ -99,12 +99,27 @@ class ScraplingBrowser:
             if self.executable_path: options['executable_path'] = self.executable_path
             self.browser_manager = AsyncStealthySession(**options)
             self.browser = await self.browser_manager.__aenter__()
+        documents, raw = [], {}
         async def setup(page):
             await page.route('**/*',lambda route: route.abort() if route.request.resource_type in {'image','media','font'} else route.continue_())
-        options = dict(page_setup=setup,wait=0,load_dom=True,network_idle=False)
+            def capture(response):
+                if response.request.is_navigation_request() and response.frame == page.main_frame:
+                    documents.append(response)
+            page.on('response',capture)
+        async def read_document(page):
+            if documents:
+                # Read while the page is alive. Scrapling's public Response.body
+                # is a DOM snapshot for HTML, not the original response bytes.
+                raw['body'] = await documents[-1].body()
+        options = dict(page_setup=setup,page_action=read_document,wait=0,load_dom=True,network_idle=False)
         if url == 'https://kudago.com/msk/':
             options.update(wait_selector='a.post-title-link',wait_selector_state='attached')
-        return await self.browser.fetch(url,**options)
+        result = await self.browser.fetch(url,**options)
+        needs_raw = urlsplit(url).netloc=='afisha.yandex.ru' or 'get_facets=' in urlsplit(url).query
+        if needs_raw and 'body' not in raw:
+            raise self.error_type('benchmark_raw_response_missing')
+        return SimpleNamespace(status=result.status,headers=result.headers,url=result.url,
+                               body=raw.get('body',result.body),dom_body=result.body,css=result.css)
 
     async def new_context(self): return self
     async def new_page(self): return self.page

@@ -70,6 +70,14 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await page.goto('https://kudago.com/msk/event/gone/')).status,410)
         browser.assert_not_awaited()
 
+    async def test_browser_keeps_raw_response_separate_from_hydrated_dom(self):
+        native=response(body=b'<html>page two</html>')
+        native.dom_body=b'<html>hydrated page one</html>'
+        page,http,browser,counters=self.make_page(response(403),native)
+        result=await page.goto('https://kudago.com/msk/concerts/?get_facets=1&page=2')
+        self.assertEqual(await result.text(),'<html>page two</html>')
+        self.assertEqual(await page.content(),'<html>hydrated page one</html>')
+
     async def test_foreign_origin_is_rejected_before_network(self):
         page,http,browser,counters=self.make_page(response())
         with self.assertRaises(NavigationError):
