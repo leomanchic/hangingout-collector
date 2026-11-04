@@ -130,6 +130,24 @@ class RecoveryContracts(unittest.TestCase):
         self.assertEqual(captured[0]['recovery_key'],'b'*32)
         self.assertNotIn('a'*64,json.dumps(captured))
 
+    def test_primary_slot_identifier_is_signed_and_conflicting_keys_are_rejected(self):
+        captured=[]
+        def post(url,**kwargs):
+            captured.append(json.loads(kwargs['content']))
+            return httpx.Response(200,json={'status':'ok','run_key':'12345.1','source':'yandex'})
+        with tempfile.TemporaryDirectory() as folder:
+            key=Path(folder)/'key';key.write_text('a'*64,encoding='ascii')
+            with patch.dict('os.environ',{'COLLECTOR_SCHEDULE_KEY':'c'*32,'COLLECTOR_RECOVERY_KEY':''}), patch('httpx.post',side_effect=post):
+                self.assertEqual(report_run(key,'12345.1','yandex','workflow_dispatch','running'),'ok')
+                with self.assertRaises(RuntimeError):
+                    report_run(key,'12345.1','yandex','schedule','running')
+                with patch.dict('os.environ',{'COLLECTOR_RECOVERY_KEY':'b'*32}):
+                    with self.assertRaises(RuntimeError):
+                        report_run(key,'12345.1','yandex','workflow_dispatch','running')
+        self.assertEqual(len(captured),1)
+        self.assertEqual(captured[0]['schedule_key'],'c'*32)
+        self.assertNotIn('a'*64,json.dumps(captured))
+
 
 if __name__=='__main__':
     unittest.main()

@@ -21,8 +21,9 @@ selector, while keeping venue and occurrence IDs for attendance and plans. This
 uses the same collected schedule; it does not add network requests or infer a
 film identity from a title. Existing 24-hex Yandex film/venue IDs remain compatible.
 
-The GitHub Actions workflow runs on standard Ubuntu runners every hour at minute 47
-(UTC), and can also be started from **Actions → Collect Moscow events → Run workflow**.
+The REG.RU monitor is the primary clock: it dispatches each source hourly at :05
+(UTC) to standard GitHub Ubuntu runners. The GitHub `:47` timer is a backup.
+Explicit manual runs are also available from **Actions → Collect Moscow events → Run workflow**.
 KudaGO and Yandex run independently: failure of one source does not stop the other.
 GitHub schedules can be delayed. Public repository schedules may be disabled after
 60 days without repository activity; re-enable from the Actions page when necessary.
@@ -42,7 +43,9 @@ destination, event schema, signature or workflow configuration.
 
 ## Discovery strategy and limits
 
-The hourly schedule is `47 * * * *` (UTC). A signed start/end receipt links each
+The primary hourly schedule is `5 * * * *` (UTC), driven by the existing REG.RU
+five-minute CRON with `COLLECTOR_PRIMARY_SCHEDULE_ENABLED=true`. The backup GitHub
+schedule remains `47 * * * *`. A signed start/end receipt links each
 source job to its GitHub run and attempt. The server marks a run complete only
 when its totals match every acknowledged publication batch. Partial uploads,
 empty results, failures and timeouts never refresh the complete-success clock.
@@ -50,9 +53,20 @@ An independent REG.RU CRON checks GitHub and receipts every five minutes:
 [/status](https://hangingout.ru/status), [/api/collector-status](https://hangingout.ru/api/collector-status).
 The separate `/api/collector-health` probe returns 503 when attention is needed;
 application health remains independent. Source freshness allows three hours,
-scheduler grace 45 minutes, and a stuck job 25 minutes. A greater than 70% drop
+primary scheduler grace 20 minutes (backup 45), and a stuck job 25 minutes. A greater than 70% drop
 against at least three prior scheduled runs of the same page band is flagged; manual diagnostic runs
 are excluded from that comparison. A watchdog/API failure cannot produce a green status.
+
+Each primary source/hour is reserved in SQLite before dispatch; its `schedule_key`
+is echoed in the signed receipt. Restarts and ambiguous POST responses do not repeat
+that request. Missed hours are not replayed in a burst. Queued or running collection
+and pending recovery suppress additional dispatches. The receiving server rejects
+obsolete primary keys and skips backup starts when a full run already covers the
+hour or is active. A manual reduced-limit diagnostic does not cover the hour.
+GitHub's own queue can still delay execution. The status page reports the primary
+clock separately from the backup; a delayed backup alone does not degrade healthy
+primary delivery. To revert orchestration, set the primary flag to false and run
+the monitor once; the GitHub schedule and bounded recovery remain available.
 
 The REG.RU monitor can recover missing/failed runs using a separate fine-grained
 GitHub token scoped to this repository with Actions write permission. The token

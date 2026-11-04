@@ -14,10 +14,17 @@ def report_run(key_file, run_key, source, trigger, status, metrics=None):
     payload = dict(operation='collector_run_v1',run_key=run_key,source=source,
                    trigger=trigger,status=status,metrics=metrics or {})
     recovery_key = os.environ.get('COLLECTOR_RECOVERY_KEY', '')
+    schedule_key = os.environ.get('COLLECTOR_SCHEDULE_KEY', '')
+    if recovery_key and schedule_key:
+        raise RuntimeError('Conflicting dispatch identifiers')
     if recovery_key:
         if trigger != 'workflow_dispatch' or not re.fullmatch(r'[a-f0-9]{32}', recovery_key):
             raise RuntimeError('Invalid recovery identifier')
         payload['recovery_key'] = recovery_key
+    if schedule_key:
+        if trigger != 'workflow_dispatch' or not re.fullmatch(r'[a-f0-9]{32}',schedule_key):
+            raise RuntimeError('Invalid schedule identifier')
+        payload['schedule_key'] = schedule_key
     body = json.dumps(payload,separators=(',',':')).encode()
     for attempt in range(3):
         stamp = str(int(time.time()))

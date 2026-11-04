@@ -33,7 +33,7 @@ def main():
         secret = None
         try:
             if report_run(key_file,run_key,source,trigger,'running') == 'skip':
-                print('Recovery already satisfied by a complete newer publication; collection skipped.')
+                print('This dispatch is superseded or the source is already covered/active; collection skipped.')
                 return 0
             extra = ['--limit', limit] if source == 'kudago' else []
             result = subprocess.run([sys.executable, "-m", f"event_collector.{source}_collect", *extra,
