@@ -173,6 +173,18 @@ also show selected first checks, refreshes and completed task counts. Deploy the
 backend including migration `010_collector_queue.sql` before this collector version.
 The prior collector still works against the migrated backend for rollback.
 
+Live verification on 2026-11-04, collector commit `d82920f3b3a3be828648c6c828967c3753aae621`:
+[first run](https://github.com/leomanchic/hangingout-collector/actions/runs/41885151485)
+completed 120 details and retained 105 pending;
+[second run](https://github.com/leomanchic/hangingout-collector/actions/runs/41887296139)
+completed those 105, leaving zero pending or leased tasks. Server-side plan IDs
+confirmed zero overlap and that all second-run tasks belonged to the first-run
+backlog. Both runs passed 54 collector tests and their publication receipts were
+confirmed (291 and 299 event/venue records, not distinct new site cards). The
+application suite passed 249 tests. This covers the discovered queue at that time,
+not every event in Moscow. Setup of Chromium took eight minutes in the second
+run, but collection itself completed normally in under six minutes.
+
 ## Read-only Scrapling experiment
 
 The separate manual **Scrapling read-only probe** workflow tests Scrapling 0.5
