@@ -45,8 +45,14 @@ def main():
             for line in result.stdout.splitlines():
                 try: value=json.loads(line)
                 except ValueError: continue
-                if isinstance(value,dict) and 'published' in value: summary=value
+                if isinstance(value,dict) and ('published' in value or value.get('status')=='idle'): summary=value
             receipt=summary.get('published',{})
+            queue=summary.get('queue',summary.get('discovery',{}).get('queue'))
+            if not result.returncode and summary.get('status')=='idle' and queue is not None and queue['processed']==0:
+                report_run(key_file,run_key,source,trigger,'idle',{'queue_processed':0,'queue_pending':queue['pending'],
+                                                               'discovered':summary.get('discovered',summary.get('discovery',{}).get('discovered',0))})
+                print('No details due; empty queue plan acknowledged. Last publication freshness unchanged.')
+                return 0
             if result.returncode or summary.get('status')!='ok' or receipt.get('status')!='ok':
                 reason=re.search(r'Collector stopped: ([a-z][a-z0-9_]{0,79})(?:[.;\s]|$)',result.stderr or '')
                 error_code=reason[1] if reason else 'collector_process_failed'
@@ -59,7 +65,6 @@ def main():
             metrics={k:receipt.get(k,0) for k in ('batches','imported','sessions','periods','added')}
             metrics.update({k:summary.get(k,summary.get('discovery',{}).get(k,0)) for k in ('discovered','fetched')})
             metrics['detail_mismatches'] = summary.get('discovery',{}).get('detail_mismatches',0)
-            queue = summary.get('discovery',{}).get('queue')
             if queue is not None:
                 metrics.update(queue_pending=queue['pending'],queue_processed=queue['processed'],
                                queue_new=queue['selected_new'],queue_refresh=queue['selected_refresh'])

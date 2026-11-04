@@ -369,6 +369,9 @@ def main():
         elif queue is not None and stats['status']=='empty_preserved':
             discovery['queue'] = queue.finish(0)
             discovery['detail_budget_remaining'] = discovery['queue']['pending']
+            if not queue.tasks:
+                print(json.dumps({**stats,'status':'idle','discovery':discovery},ensure_ascii=True))
+                return
         print(json.dumps({**stats, "discovery": discovery}, ensure_ascii=True))
         if stats["status"] != "ok":
             raise SystemExit(2)

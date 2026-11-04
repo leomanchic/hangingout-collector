@@ -185,6 +185,36 @@ application suite passed 249 tests. This covers the discovered queue at that tim
 not every event in Moscow. Setup of Chromium took eight minutes in the second
 run, but collection itself completed normally in under six minutes.
 
+## Persistent KudaGO detail queue
+
+KudaGO now uses the same durable protocol, with a separate source namespace and
+`/api/internal/collector/queue/kudago`. Its normal budget remains 300 details
+(up to 600 explicitly configured). Discovery saves all eligible URLs before the
+budget is applied. Old pending URLs remain eligible when page bands rotate;
+half the budget is reserved for due refreshes, with unused slots transferred.
+The ID is a stable hash of the canonical Moscow event URL; URL redirects still
+pass the existing parser's destination checks and catalogue deduplication.
+HTML, browser state and old schedules are not persisted in the queue.
+
+Tasks are completed only after every publication batch is confirmed. Removed
+pages and valid cards without an accepted schedule are checked again after six
+hours; accepted cards after two. A fatal HTTP 403, CAPTCHA or parsing error stops
+the run and leaves its tasks unfinished. Logs show the phase (`home`, `listings`,
+`details`) and bounded counters, without response bodies or challenge URLs.
+The queue does not make a source that refuses access available.
+
+For either source, a fully discovered but empty due-task plan may report `idle`.
+The server requires a finished empty plan and no publication receipts. It counts
+as an executed scheduled scan, while **last publication freshness is unchanged**.
+A nonempty plan whose cards all fail validation still reports `empty_preserved`
+and fails the job. This avoids treating a failed extraction as a healthy idle run.
+
+Deploy the backend first, then update the collector. The existing migration 010
+already has source keys; no schema migration, credentials or extra CRON job are
+needed. Status shows both independent queues. Offline validation: 263 application
+tests and 62 standalone collector tests, including continuation with missing
+current listings, source isolation, rejected publication and empty-run reporting.
+
 ## Read-only Scrapling experiment
 
 The separate manual **Scrapling read-only probe** workflow tests Scrapling 0.5

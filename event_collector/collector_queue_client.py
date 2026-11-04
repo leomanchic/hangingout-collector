@@ -1,5 +1,6 @@
 """Signed durable queue protocol; never used by local dry runs or benchmarks."""
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -12,12 +13,14 @@ import httpx
 from .protocol import ENDPOINT, MAX_BYTES, signature
 from .source_http import SyncError, retry_delay
 
-QUEUE_ENDPOINT = '/api/internal/collector/queue/yandex'
+QUEUE_ENDPOINTS = {source: '/api/internal/collector/queue/' + source for source in ('yandex','kudago')}
+QUEUE_ENDPOINT = QUEUE_ENDPOINTS['yandex']
 CATEGORIES = ('music','theatre','art','walk','learning','cinema')
 ERRORS = {'yandex_detail_event_mismatch','yandex_invalid_encoding','http_404','http_410'}
+SOURCE_ERRORS = {'yandex': ERRORS, 'kudago': set()}
 
 
-def valid_task(task):
+def valid_task(task,source='yandex'):
     if not isinstance(task,dict) or set(task) != {'id','url','category'}:
         return False
     if not isinstance(task['id'],str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,48}',task['id']):
@@ -27,9 +30,15 @@ def valid_task(task):
         return False
     try:parsed=urlsplit(url)
     except ValueError:return False
-    return (parsed.scheme=='https' and parsed.netloc=='afisha.yandex.ru'
-            and parsed.path.startswith('/moscow/') and not parsed.query and not parsed.fragment
-            and not any(p in {'.','..'} for p in parsed.path.split('/')) and task['category'] in CATEGORIES)
+    if (parsed.scheme!='https' or parsed.query or parsed.fragment
+            or any(p in {'.','..'} for p in parsed.path.split('/')) or task['category'] not in CATEGORIES):
+        return False
+    if source=='yandex':
+        return parsed.netloc=='afisha.yandex.ru' and parsed.path.startswith('/moscow/')
+    if source=='kudago':
+        return (parsed.netloc=='kudago.com' and re.fullmatch(r'/msk/event/[a-z0-9-]+/',parsed.path) is not None
+                and task['id']=='k_'+hashlib.sha256(url.encode('utf-8')).hexdigest()[:40])
+    return False
 
 
 def describe(item):
@@ -39,20 +48,27 @@ def describe(item):
     return task if valid_task(task) else None
 
 
+def describe_kudago(url,category):
+    task={'id':'k_'+hashlib.sha256(url.encode('utf-8')).hexdigest()[:40],'url':url,'category':category}
+    return task if valid_task(task,'kudago') else None
+
+
 class DetailQueue:
-    def __init__(self,key_file,run_key,*,client=None):
+    def __init__(self,key_file,run_key,*,client=None,source='yandex'):
+        if source not in QUEUE_ENDPOINTS:raise SyncError('queue_invalid_source')
         if not isinstance(run_key,str) or not re.fullmatch(r'[1-9][0-9]{0,19}\.[1-9][0-9]{0,3}',run_key):
             raise SyncError('queue_invalid_run_key')
         self.secret=Path(key_file).read_text(encoding='ascii').strip()
         if not re.fullmatch(r'[a-f0-9]{64}',self.secret):
             raise SyncError('invalid_collector_key_file')
         self.run_key,self.client=run_key,client
+        self.source=source
         self.tasks=[]
         self.outcomes={}
         self.summary={}
 
     def request(self,action,**data):
-        payload={'operation':'collector_queue_v1','action':action,'source':'yandex',
+        payload={'operation':'collector_queue_v1','action':action,'source':self.source,
                  'run_key':self.run_key,'request_id':uuid.uuid4().hex,**data}
         body=json.dumps(payload,separators=(',',':'),ensure_ascii=True).encode()
         if len(body)>MAX_BYTES:raise SyncError('queue_request_too_large')
@@ -62,7 +78,7 @@ class DetailQueue:
                 stamp=str(int(time.time()))
                 delay=2**attempt
                 try:
-                    r=client.post('https://hangingout.ru'+QUEUE_ENDPOINT,content=body,
+                    r=client.post('https://hangingout.ru'+QUEUE_ENDPOINTS[self.source],content=body,
                                   headers={'Content-Type':'application/json','X-Collector-Time':stamp,
                                            'X-Collector-Signature':signature(self.secret,stamp,body)},follow_redirects=False)
                     if r.status_code==200:
@@ -87,7 +103,7 @@ class DetailQueue:
     async def plan(self,candidates,budget):
         receipt=await asyncio.to_thread(self.request,'plan',candidates=candidates,budget=budget)
         tasks=receipt.get('tasks')
-        if (not isinstance(tasks,list) or len(tasks)>budget or any(not valid_task(t) for t in tasks)
+        if (not isinstance(tasks,list) or len(tasks)>budget or any(not valid_task(t,self.source) for t in tasks)
                 or len({t['id'] for t in tasks})!=len(tasks)
                 or not isinstance(receipt.get('lease_until'),int) or receipt['lease_until']<=time.time()):
             raise SyncError('queue_invalid_plan')

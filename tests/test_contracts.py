@@ -92,6 +92,16 @@ class CollectorContracts(unittest.TestCase):
             self.assertEqual(run_collector.main(),1)
             child.assert_not_called()
 
+    def test_acknowledged_no_work_reports_idle_instead_of_publication_success(self):
+        from types import SimpleNamespace
+        for source in ('kudago','yandex'):
+            summary={'status':'idle','discovered':10,'queue':{'processed':0,'pending':0}}
+            if source=='yandex':summary={'status':'idle','discovery':{'discovered':10,'queue':summary['queue']}}
+            result=SimpleNamespace(returncode=0,stdout=json.dumps(summary),stderr='')
+            with patch.dict('os.environ',{'COLLECTOR_SOURCE':source,'COLLECTOR_SECRET':'a'*64,'GITHUB_RUN_ID':'12345','GITHUB_RUN_ATTEMPT':'1','GITHUB_EVENT_NAME':'schedule'}),patch('subprocess.run',return_value=result),patch('run_collector.report_run') as report,patch('builtins.print'):
+                self.assertEqual(run_collector.main(),0)
+                self.assertEqual([call.args[4] for call in report.call_args_list],['running','idle'])
+
 
 if __name__ == '__main__':
     unittest.main()

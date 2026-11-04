@@ -4,6 +4,7 @@ import asyncio
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -13,13 +14,17 @@ from .kudago_html import LISTINGS, ORIGIN, listing_links, normalize, event_url, 
 from .source_http import SyncError, retry_delay
 from .yandex_collect import publish
 from .collector_frontier import page_window, interleave
+from .collector_queue_client import DetailQueue, describe_kudago
+
+LANE_CATEGORIES = dict(zip(LISTINGS, ('music','theatre','learning','art','walk','cinema')))
 
 
-async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
+async def collect(*, limit=300, days=60, pages=4, channel="msedge", queue=None):
     from playwright.async_api import async_playwright, Error as BrowserError
     since = datetime.now(timezone.utc)
     until = since + timedelta(days=days)
     records, skipped, visited = {}, Counter(), 0
+    phase='home'
     try:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(channel=channel, headless=True)
@@ -73,8 +78,9 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                     return html
 
                 await load(ORIGIN + "/msk/", home=True)
-                groups, lanes, pagination_stops = [], {}, {}
+                groups, lanes, pagination_stops, categories = [], {}, {}, {}
                 window = page_window(pages)
+                phase='listings'
                 for path in LISTINGS:
                     await asyncio.sleep(1)
                     html = await load(ORIGIN + path)
@@ -94,10 +100,18 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                         batches.append(links)
                     group = interleave(batches)
                     groups.append(group)
+                    for url in group:categories.setdefault(url,LANE_CATEGORIES[path])
                     lanes[path] = len(group)
                     print(json.dumps({'progress':'discovery', 'lane':path, 'cards':len(group)}), flush=True)
-                urls = interleave(groups, limit=limit)
-                for url in urls:
+                discovered=interleave(groups)
+                work=[{'url':url} for url in discovered[:limit]]
+                if queue is not None:
+                    candidates=[describe_kudago(url,categories[url]) for url in discovered]
+                    if any(t is None for t in candidates):raise SyncError('queue_invalid_kudago_candidate')
+                    work=await queue.plan(candidates,limit)
+                phase='details'
+                for task in work:
+                    url=task['url']
                     await asyncio.sleep(1)
                     html = await load(url, card=True)
                     visited += 1
@@ -105,6 +119,7 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                         print(json.dumps({'progress':'details', 'pages':visited, 'events':len(records)}), flush=True)
                     if html is None:
                         skipped['removed_card'] += 1
+                        if queue is not None:queue.record(task['id'],'empty')
                         continue
                     record, reason = normalize(html, event_url(page.url), since, until)
                     if record:
@@ -114,6 +129,7 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                         records[record["source_event_id"]] = record
                     else:
                         skipped[reason] += 1
+                    if queue is not None:queue.record(task['id'],'checked' if record else 'empty')
                 # A deep crawl takes minutes. A slot that started during it must
                 # not invalidate the whole signed batch at the receiver.
                 cutoff = datetime.now(timezone.utc) + timedelta(seconds=30)
@@ -122,14 +138,20 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge"):
                     if not record['occurrences'] and not record.get('period'):
                         del records[key]
                         skipped['started_during_collection'] += 1
-                return list(records.values()), dict(source="kudago", fetched=visited, discovered=len(set(u for g in groups for u in g)),
+                return list(records.values()), dict(source="kudago", fetched=visited, discovered=len(discovered),
                                                    imported=len(records), sessions=sum(len(r["occurrences"]) for r in records.values()),
                                                    periods=sum(bool(r.get('period')) for r in records.values()),
                                                    skipped=dict(skipped), categories=dict(Counter(r['category'] for r in records.values())),
                                                    lanes=lanes, pagination_stops=pagination_stops,
-                                                   page_window=window, coverage="partial", days=days)
+                                                   page_window=window, coverage="partial", days=days,
+                                                   **({'queue':queue.summary} if queue is not None else {}))
             finally:
                 await browser.close()
+    except SyncError:
+        # Only bounded phase/counters: never log page HTML, cookies or challenge URLs.
+        print(json.dumps({'progress':'collection_stopped','source':'kudago','phase':phase,
+                          'fetched':visited,'accepted':len(records)}),flush=True)
+        raise
     except BrowserError:
         raise SyncError("kudago_browser_navigation_failed") from None
 
@@ -149,11 +171,16 @@ def main():
     try:
         if args.publish and not args.key_file.is_file():
             raise SyncError("collector_key_file_missing")
+        queue=DetailQueue(args.key_file,os.environ['COLLECTOR_RUN_KEY'],source='kudago') if args.publish and os.environ.get('COLLECTOR_RUN_KEY') else None
         async def run():
             async with asyncio.timeout(900):
-                return await collect(limit=args.limit, days=args.days, pages=args.pages, channel=args.channel)
+                return await collect(limit=args.limit, days=args.days, pages=args.pages, channel=args.channel,queue=queue)
         records, stats = asyncio.run(run())
         if not records:
+            if queue is not None:stats['queue']=queue.finish(0)
+            if queue is not None and not queue.tasks:
+                print(json.dumps({**stats,'status':'idle'}))
+                return
             print(json.dumps({**stats, "status": "empty_preserved"}))
             raise SystemExit(2)
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +189,7 @@ def main():
         temporary.replace(args.output)
         if args.publish:
             stats["published"] = publish(records, args.key_file, source="kudago")
+            if queue is not None:stats['queue']=queue.finish(len(records))
             receipt = ROOT / "data/kudago-collector-last-success.json"
             receipt.parent.mkdir(parents=True, exist_ok=True)
             receipt.write_text(json.dumps(dict(at=time.time(), host="hangingout.ru", imported=len(records))), encoding="utf-8")
