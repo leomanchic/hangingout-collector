@@ -59,6 +59,10 @@ def main():
             metrics={k:receipt.get(k,0) for k in ('batches','imported','sessions','periods','added')}
             metrics.update({k:summary.get(k,summary.get('discovery',{}).get(k,0)) for k in ('discovered','fetched')})
             metrics['detail_mismatches'] = summary.get('discovery',{}).get('detail_mismatches',0)
+            queue = summary.get('discovery',{}).get('queue')
+            if queue is not None:
+                metrics.update(queue_pending=queue['pending'],queue_processed=queue['processed'],
+                               queue_new=queue['selected_new'],queue_refresh=queue['selected_refresh'])
             window=summary.get('page_window',summary.get('discovery',{}).get('page_window',[1]))
             metrics['page_band']=window[1] if len(window)>1 else 1
             report_run(key_file,run_key,source,trigger,'success',metrics)

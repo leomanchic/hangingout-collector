@@ -142,6 +142,37 @@ For local development: Python 3.12, `pip install -r requirements.txt`, then
 `python -m event_collector.kudago_collect --channel chromium` or the equivalent
 `event_collector.yandex_collect`. Generated data is ignored by Git.
 
+## Persistent Yandex detail queue
+
+Production Yandex runs retain their detail frontier in the REG.RU SQLite database,
+through signed requests to `/api/internal/collector/queue/yandex`. It is independent
+of the runner filesystem and GitHub cache. No additional credentials are needed.
+Dry runs, the benchmark and local collection without an active CI run do not use it.
+
+Each run discovers the usual six lanes and leases up to 120 pending details for
+20 minutes. Half the available budget is reserved for due refreshes; the remaining
+half goes to never-checked cards, with unused slots transferred to the other group.
+Each group rotates categories and prioritizes older tasks. First-check counts refer
+to the queue, not necessarily newly added catalogue events. Queued URLs can be
+visited even when the card is absent from the current page band.
+
+Only event ID, public Moscow URL, category and scheduling metadata are persisted.
+Every detail is fetched and validated again; old listing content is never imported.
+Successful detail checks become due after two hours; valid pages with no detailed
+schedule after six hours. Isolated identity/encoding errors back off from one hour
+to a day; 404/410 cards wait a day. The existing shared detail-error budget remains.
+
+Completion is acknowledged only after all publication batches are confirmed.
+A failed publication leaves healthy tasks unfinished. Error cooldowns are saved
+even when the error budget stops a run. Leases from failed runs or expired leases
+are reclaimed; request retries are idempotent. The queue is capped at 5,000 IDs;
+unseen-for-seven-days entries expire from the queue without deleting site events.
+
+`/status` and `/api/collector-status` expose pending, due and leased counts. CI logs
+also show selected first checks, refreshes and completed task counts. Deploy the
+backend including migration `010_collector_queue.sql` before this collector version.
+The prior collector still works against the migrated backend for rollback.
+
 ## Read-only Scrapling experiment
 
 The separate manual **Scrapling read-only probe** workflow tests Scrapling 0.5
@@ -209,10 +240,10 @@ not proof of parser loss. Yandex event-ID overlap was 97.7% and 98.0%; the secon
 pair retained every baseline session among IDs common to both runs. The candidate
 does not yet justify replacing the production loader.
 
-A concrete coverage limit remains: Yandex inspected 120 details with 105-115
+A concrete coverage limit was observed: Yandex inspected 120 details with 105-115
 additional candidates still pending; KudaGO's first baseline inspected 300 of
-496 discovered cards. A persistent queue across hourly runs is the next priority,
-while retaining freshness checks and bounded request rates. Pending candidates
+496 discovered cards. The persistent Yandex queue above now continues remaining
+details across runs, retaining freshness checks and bounded request rates. Pending candidates
 still need date and venue validation before they can become accepted events.
 
 ## References

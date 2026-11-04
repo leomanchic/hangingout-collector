@@ -8,6 +8,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from urllib.parse import urljoin, urlsplit
@@ -21,6 +22,7 @@ import httpx
 from .source_http import SyncError, retry_delay
 from .yandex_afisha import ORIGIN, LISTINGS, normalize, parse_page, detail_items
 from .collector_frontier import page_window, interleave
+from .collector_queue_client import DetailQueue, describe
 from .common import ROOT
 from .protocol import ENDPOINT, MAX_BYTES, signature
 
@@ -108,7 +110,7 @@ async def load_browser_page(page, url, browser_error):
             await asyncio.sleep(2 ** attempt)
 
 
-async def browser_fetch(*, pages, channel, details=120, days=60):
+async def browser_fetch(*, pages, channel, details=120, days=60, queue=None):
     try:
         from playwright.async_api import async_playwright, Error as BrowserError
     except ImportError:
@@ -131,6 +133,7 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                         html = await load_page(ORIGIN + path + (f'?page={number}' if number > 1 else ''))
                         actual_path = urlsplit(page.url).path
                         batch, has_next = parse_page(html, page=number, path=actual_path)
+                        batch = [{**item, '_queue_category': category} for item in batch]
                         diagnostics["listing_pages"] += 1
                         batches.append(batch)
                         if not has_next:
@@ -151,7 +154,16 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                         # Unknown city may mean a multi-venue card: inspect its
                         # actual Moscow venue schedule instead of guessing.
                         candidates.append(item)
-                for item in candidates[:details]:
+                if queue is not None:
+                    descriptors = [task for item in candidates if (task := describe(item)) is not None]
+                    tasks = await queue.plan(descriptors, details)
+                    live = {item['event']['id']:item for item in candidates}
+                    work = [({'event':{'id':t['id'],'url':t['url']}}, live.get(t['id'])) for t in tasks]
+                    diagnostics['queue'] = queue.summary
+                    diagnostics['queue_discovery_rejected'] = len(candidates)-len(descriptors)
+                else:
+                    work = [(item,item) for item in candidates[:details]]
+                for item, fallback in work:
                     url = urljoin(ORIGIN, item['event'].get('url', ''))
                     parsed = urlsplit(url)
                     if (parsed.scheme != 'https' or parsed.netloc != 'afisha.yandex.ru'
@@ -161,18 +173,21 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                     diagnostics['details'] += 1
                     try:
                         html = await load_page(url)
+                        batch = detail_items(html, item['event']['id'])
                     except SyncError as exc:
-                        quarantine_detail(exc, item['event']['id'], diagnostics, min(details, len(candidates)))
+                        if queue is not None and str(exc) in DETAIL_SKIPPABLE_ERRORS:
+                            queue.record(item['event']['id'],'error',str(exc))
+                        quarantine_detail(exc, item['event']['id'], diagnostics, len(work))
                         continue
-                    batch = checked_detail_items(html, item['event']['id'], diagnostics, min(details,len(candidates)))
-                    if batch is None:
-                        continue
+                    if queue is not None:
+                        queue.record(item['event']['id'],'checked' if batch else 'empty')
                     if diagnostics['details'] % 30 == 0:
                         print(json.dumps({'progress':'details', 'pages':diagnostics['details']}), flush=True)
                     if batch:
                         items.extend(batch)
-                    else:
-                        items.append(item)
+                    elif fallback is not None:
+                        # Only a listing observed in this run may supply a fallback.
+                        items.append(fallback)
                 diagnostics['discovered'] = len(discovered)
                 diagnostics['detail_budget_remaining'] = max(0, len(candidates) - details)
                 # Malformed listing URLs must not inflate the permitted skip ratio.
@@ -181,7 +196,10 @@ async def browser_fetch(*, pages, channel, details=120, days=60):
                 diagnostics['detail_partial'] = bool(diagnostics.get('detail_failures'))
                 return items, diagnostics
             finally:
-                await browser.close()
+                try:
+                    if queue is not None:await queue.flush_errors()
+                finally:
+                    await browser.close()
     except BrowserError:
         # Browser exceptions can include a CAPTCHA URL with challenge tokens.
         raise SyncError("browser_navigation_failed") from None
@@ -327,6 +345,7 @@ def main():
     try:
         if args.publish and not args.key_file.is_file():
             raise SyncError("collector_key_file_missing")
+        queue = DetailQueue(args.key_file,os.environ['COLLECTOR_RUN_KEY']) if args.publish and os.environ.get('COLLECTOR_RUN_KEY') else None
         if args.html:
             if args.html.stat().st_size > 8_000_000:
                 raise SyncError("page_too_large")
@@ -335,15 +354,21 @@ def main():
         else:
             async def fetch():
                 async with asyncio.timeout(900):
-                    return await browser_fetch(pages=args.pages, channel=args.channel, details=args.details, days=args.days)
+                    return await browser_fetch(pages=args.pages, channel=args.channel, details=args.details, days=args.days,queue=queue)
             items, discovery = asyncio.run(fetch())
         stats = export(items, args.output, days=args.days)
         if args.publish and stats["status"] == "ok":
             records = json.loads(Path(args.output).read_text(encoding="utf-8"))
             stats["published"] = publish(records, args.key_file)
+            if queue is not None:
+                discovery['queue'] = queue.finish(len(records))
+                discovery['detail_budget_remaining'] = discovery['queue']['pending']
             receipt = ROOT / "data/collector-last-success.json"
             receipt.parent.mkdir(parents=True, exist_ok=True)
             receipt.write_text(json.dumps(dict(at=time.time(), host="hangingout.ru", imported=len(records))), encoding="utf-8")
+        elif queue is not None and stats['status']=='empty_preserved':
+            discovery['queue'] = queue.finish(0)
+            discovery['detail_budget_remaining'] = discovery['queue']['pending']
         print(json.dumps({**stats, "discovery": discovery}, ensure_ascii=True))
         if stats["status"] != "ok":
             raise SystemExit(2)
