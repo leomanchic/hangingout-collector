@@ -78,15 +78,28 @@ Each incident permits at most two recovery attempts with a 20-minute cooldown;
 an ordinary transient source failure first waits ten minutes. Active GitHub jobs
 are allowed to finish. Disabled workflows are not automatically re-enabled.
 
-Late recovery jobs skip collection when a newer complete publication has already
-satisfied the incident. Only verified ingestion receipts resolve a recovery;
-GitHub accepting a dispatch or a green job without delivery does not suffice.
+Late recovery jobs skip collection only when evidence matching that incident
+already exists. Data recovery requires a complete confirmed publication. A missing
+primary slot requires a completed primary, backup or recovery run; a confirmed
+empty queue plan (`idle`) also covers the scheduled scan, without refreshing data.
+A plain manual run does not cover a missing primary slot. The monitor checks the
+same rule before creating an incident, before accepting a late recovery start,
+and when resolving it. Stale snapshots cannot create instant open/close loops.
+GitHub accepting a dispatch or a green job alone does not suffice.
 Short network/429/5xx failures have bounded request retries. Batch retries reuse
 the same ID and bytes, so a lost response cannot import a batch twice. CAPTCHA,
 permission, schema and unknown failures stop additional automatic retries.
 The monitor optionally queues one private owner alert per incident and one recovery
 message through the existing Telegram outbox. Collector jobs never receive Telegram
 credentials. Normal event expiration and duplicate checks remain server-side.
+
+Recovery consistency was verified on 2026-11-04 after reproducing duplicate
+incidents for one missed KudaGO slot. The server passed 276 application tests.
+The monitor reserved one recovery attempt, [run 41902020860](https://github.com/leomanchic/hangingout-collector/actions/runs/41902020860),
+which processed 25 queued cards and published 12 existing event/venue records.
+Two subsequent monitor checks retained exactly one incident and one attempt,
+resolved by that run. Both application and collector health returned HTTP 200;
+the overall collector status became `ok`. Historical incident rows were preserved.
 
 Bounded multi-day KudaGO visiting periods have their own date-only schema and
 an explicit estimated label. They expire after the final Moscow calendar day,
