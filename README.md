@@ -153,6 +153,29 @@ are isolated in `requirements-probe.txt`; production remains on Playwright.
 The browser probe uses Scrapling's browser patches, without saved user state,
 proxies or CAPTCHA solving. One successful sample is not a reliability benchmark.
 
+## Full-volume loader comparison
+
+The manual **Full collector comparison** workflow runs the existing collectors
+with their production budgets: six category lanes, four pages per lane, up to
+300 KudaGO cards or 120 Yandex details, and a 60-day date horizon. Two paired
+rounds cover page windows 1/2/3/4 and 1/5/6/7. The second round reverses loader
+order. Each pair uses the same runner/IP and reference time; live listings can
+still change between runs. Browser startup is included in timing; installation
+is excluded. Every individual collection is limited to 15 minutes.
+
+The candidate first uses Scrapling HTTP, falling back to an isolated browser
+when required. A 403 switches that host to browser mode for the rest of the run.
+429 and server errors retain the existing collector retry/backoff policy.
+Parsing, source identity, dates, deduplication and request pacing are unchanged.
+No cookies, proxies or CAPTCHA solver are supplied. The transport adapter only
+exists in an isolated benchmark process; production is not switched by this test.
+
+Comparison artifacts (retained for seven days) contain public event/venue IDs,
+schedule fingerprints, coverage losses/gains, validation skips and transport
+timings. They contain no raw source HTML or browser state. The workflow receives
+no ingestion credentials and publication functions are explicitly disabled.
+An unsuccessful collection fails the job while preserving available diagnostics.
+
 ## References
 
 - [GitHub scheduled workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
