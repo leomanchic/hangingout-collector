@@ -215,6 +215,21 @@ needed. Status shows both independent queues. Offline validation: 263 applicatio
 tests and 62 standalone collector tests, including continuation with missing
 current listings, source isolation, rejected publication and empty-run reporting.
 
+Live verification: [run 41897504634](https://github.com/leomanchic/hangingout-collector/actions/runs/41897504634),
+commit `cbfbb1acf07dc08b889cc7454ccfa9d5bf2998c0`, succeeded on 2026-11-04.
+All 226 queued IDs were distinct and acknowledged; no pending or leased tasks
+remained. The server confirmed 91 accepted event/venue records (156 sessions,
+21 periods), all updates with `added=0`. The collector skipped 95 cards without a supported
+upcoming schedule, 39 without one unambiguous venue, and one removed card.
+Page band 1/5/6/7 produced fewer than the 300-task budget in this run. Continuation
+above the budget is covered by offline 300+195 and 600+195 restart tests; this live
+run alone is not evidence of multi-run continuation.
+
+The preceding hourly KudaGO run returned HTTP 403; this verification could access
+the source. Both source statuses became `ok`, while the monitor still reported
+the earlier missed primary slot (`schedule_overdue`). A successful manual run
+does not conceal a failed scheduled run.
+
 ## Read-only Scrapling experiment
 
 The separate manual **Scrapling read-only probe** workflow tests Scrapling 0.5
