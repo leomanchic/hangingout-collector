@@ -63,3 +63,11 @@ jobs:
           COLLECTOR_RECOVERY_KEY: ${{ inputs.recovery_key }}
           COLLECTOR_SCHEDULE_KEY: ${{ inputs.schedule_key }}
         run: python run_collector.py
+      - name: Save KudaGO skipped-card diagnostics
+        if: always() && matrix.source == 'kudago'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kudago-skips-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/kudago-skips.json
+          if-no-files-found: ignore
+          retention-days: 30

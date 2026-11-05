@@ -40,7 +40,7 @@ class KudaQueueContracts(unittest.TestCase):
             q=DetailQueue(key,'123.1',client=client,source='kudago')
             with self.assertRaisesRegex(SyncError,'queue_invalid_plan'):asyncio.run(q.plan([],300))
 
-    def collect(self,*,removed=False,blocked=None):
+    def collect(self,*,removed=False,blocked=None,diagnostics_path=None,starts_during=False):
         class BrowserError(Exception):pass
         tasks=[describe_kudago(f'https://kudago.com/msk/event/{name}/','music') for name in ('old-a','old-b')]
         page=SimpleNamespace(url='',content=AsyncMock(return_value='html'))
@@ -59,13 +59,39 @@ class KudaQueueContracts(unittest.TestCase):
             async def __aexit__(self,*args):pass
         queue=SimpleNamespace(plan=AsyncMock(return_value=tasks),summary={},record=Mock(),finish=Mock())
         def normalize(html,url,*args):
-            return {'source_event_id':url,'category':'music','occurrences':[{'id':'1','starts_at':(datetime.now(timezone.utc)+timedelta(days=1)).isoformat()}]},None
+            delay = timedelta(seconds=10) if starts_during else timedelta(days=1)
+            return {'source_event_id':url,'category':'music','occurrences':[{'id':'1','starts_at':(datetime.now(timezone.utc)+delay).isoformat()}]},None
         self.queue,self.browser,self.page=queue,browser,page
         self.output=io.StringIO()
         with patch.dict('sys.modules',{'playwright.async_api':SimpleNamespace(async_playwright=Playwright,Error=BrowserError)}), \
              patch.object(collector,'LISTINGS',('/msk/concerts/',)),patch.object(collector,'listing_links',return_value=[]), \
              patch.object(collector,'normalize',side_effect=normalize),patch('asyncio.sleep',new_callable=AsyncMock),redirect_stdout(self.output):
-            return asyncio.run(collector.collect(pages=1,limit=300,channel='chromium',queue=queue))
+            return asyncio.run(collector.collect(pages=1,limit=300,channel='chromium',queue=queue,diagnostics_path=diagnostics_path))
+
+    def test_skip_report_survives_later_failure_and_complete_collection(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'skips.json'
+            with self.assertRaisesRegex(SyncError,'kudago_http_403'):
+                self.collect(removed=True,blocked='detail',diagnostics_path=path)
+            partial=json.loads(path.read_text(encoding='utf-8'))
+            self.assertFalse(partial['collection_complete'])
+            self.assertEqual(partial['skipped_cards'],[{'url':'https://kudago.com/msk/event/old-a/',
+                'category':'music','reason':'removed_card'}])
+            self.collect(removed=True,diagnostics_path=path)
+            final=json.loads(path.read_text(encoding='utf-8'))
+            self.assertTrue(final['collection_complete'])
+            self.assertEqual(final['reasons'],{'removed_card':2})
+
+    def test_started_during_collection_is_empty_in_report_and_queue(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'skips.json'
+            records,stats=self.collect(starts_during=True,diagnostics_path=path)
+            self.assertEqual(records,[])
+            self.assertEqual(stats['skipped'],{'started_during_collection':2})
+            final=json.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual(final['accepted_records'],0)
+            self.assertEqual(final['reasons'],{'started_during_collection':2})
+            self.assertTrue(all(call.args[1]=='empty' for call in self.queue.record.call_args_list[-2:]))
 
     def test_saved_urls_are_fetched_when_absent_from_current_listing(self):
         records,stats=self.collect()

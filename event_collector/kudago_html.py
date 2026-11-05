@@ -1,5 +1,5 @@
-"""Read public KudaGO cards. Date ranges/opening hours are never showtimes."""
-from datetime import datetime, timezone
+"""Read public KudaGO cards without turning visiting windows into showtimes."""
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from html import unescape
 import json
@@ -123,6 +123,29 @@ def listing_links(html):
                              and (url := event_url(node.attrs.get("href", "")))))
 
 
+def overnight_start(day, clock, category):
+    """Reduce an explicit one-night event to its start, never expand opening hours.
+
+    Observed on /msk/event/rocklike/: 28–29 ноября, 23:30–3:00.
+    Same-month, adjacent calendar days and a clock crossing midnight are required.
+    Recurring ranges, weekdays and visiting windows remain unsupported here.
+    """
+    if category not in {'music', 'theatre', 'cinema'}:
+        return None
+    dates = re.fullmatch(r'(\d{1,2})\s*[–—-]\s*(\d{1,2}) (' + '|'.join(MONTHS) + r')(?: (20\d{2}))?', day)
+    clocks = re.fullmatch(r'([01]?\d|2[0-3]):([0-5]\d)\s*[–—-]\s*([01]?\d|2[0-3]):([0-5]\d)', clock)
+    if not dates or not clocks or int(dates[2]) != int(dates[1]) + 1:
+        return None
+    start_minutes = int(clocks[1]) * 60 + int(clocks[2])
+    end_minutes = int(clocks[3]) * 60 + int(clocks[4])
+    # A bounded evening-to-morning interval distinguishes a show from daily hours.
+    if start_minutes < 18 * 60 or end_minutes > 8 * 60 or start_minutes <= end_minutes:
+        return None
+    return (f'{int(dates[1])} {dates[3]}' + (f' {dates[4]}' if dates[4] else ''),
+            f'{int(clocks[1]):02}:{clocks[2]}', int(dates[2]),
+            (24 * 60 - start_minutes + end_minutes))
+
+
 def normalize(html, url, since, until):
     if not event_url(url):
         raise SyncError("invalid_kudago_url")
@@ -195,6 +218,9 @@ def normalize(html, url, since, until):
             cells = [n.text().lower() for n in row.nodes() if n.tag == "td"]
             if len(cells) != 2:
                 continue
+            overnight = overnight_start(*cells, category)
+            if overnight:
+                cells = list(overnight[:2])
             day = re.fullmatch(r"(\d{1,2}) (" + "|".join(MONTHS) + r")(?: (20\d{2}))?", cells[0])
             clock = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", cells[1])
             if not day or not clock:
@@ -206,6 +232,10 @@ def normalize(html, url, since, until):
                     start = datetime(year, MONTHS.index(day[2]) + 1, int(day[1]), int(clock[1]), int(clock[2]), tzinfo=ZONE)
                 except ValueError:
                     continue
+                if overnight:
+                    end = start + timedelta(minutes=overnight[3])
+                    if end.day != overnight[2] or end.month != start.month or end > upper:
+                        continue
                 if since < start < until and lower <= start <= upper:
                     candidates.append(start)
             if len(candidates) == 1:

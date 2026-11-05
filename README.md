@@ -316,6 +316,23 @@ additional candidates still pending; KudaGO's first baseline inspected 300 of
 details across runs, retaining freshness checks and bounded request rates. Pending candidates
 still need date and venue validation before they can become accepted events.
 
+## Skipped-card diagnostics
+
+KudaGO runs attach `kudago-skips-<run>-<attempt>` to the Actions run for 30 days.
+The JSON contains canonical public card URLs, discovery categories and bounded
+reason codes. It contains no HTML, cookies, credentials or challenge URLs.
+`collection_complete: false` means collection stopped early; the report keeps
+the skips already observed. A completed extraction report does not confirm
+publication: use the signed run/batch receipts and collector status for that.
+The report covers checked cards in that run, not the whole catalogue or Yandex.
+
+On 5 November 2026, inspected KudaGO examples included missing venue metadata,
+an unbounded permanent exhibition and an explicit one-night concert interval.
+The collector now handles a same-month adjacent-day interval such as
+`28–29 ноября 23:30–3:00` as one Moscow-time start, provided it fits the source
+date bounds and collection horizon. Multi-day/recurring ranges, opening hours,
+missing venues and expired dates are still not converted into showtimes.
+
 ## References
 
 - [GitHub scheduled workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)

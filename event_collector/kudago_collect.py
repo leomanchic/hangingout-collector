@@ -17,13 +17,48 @@ from .collector_frontier import page_window, interleave
 from .collector_queue_client import DetailQueue, describe_kudago
 
 LANE_CATEGORIES = dict(zip(LISTINGS, ('music','theatre','learning','art','walk','cinema')))
+SKIP_REASONS = frozenset({'removed_card', 'no_event_metadata', 'different_canonical_url',
+    'not_scheduled', 'no_stable_event_id', 'other_category', 'no_unambiguous_venue',
+    'no_schedule_year_bounds', 'no_precise_upcoming_sessions', 'started_during_collection'})
 
 
-async def collect(*, limit=300, days=60, pages=4, channel="msedge", queue=None):
+def write_skip_report(path, rows, *, complete, fetched, accepted):
+    """Public, bounded extraction diagnostics; never a publication receipt."""
+    if path is None:
+        return
+    safe = []
+    for row in rows:
+        if (set(row) != {'url', 'category', 'reason'} or len(row['url']) > 600 or event_url(row['url']) != row['url']
+                or row['category'] not in LANE_CATEGORIES.values() or row['reason'] not in SKIP_REASONS):
+            raise SyncError('invalid_skip_diagnostic')
+        safe.append(row)
+    if len(safe) > 600:
+        raise SyncError('skip_diagnostic_limit')
+    report = dict(version=1, source='kudago', scope='card_extraction',
+                  generated_at=datetime.now(timezone.utc).isoformat(), collection_complete=complete,
+                  fetched=fetched, accepted_records=accepted, skipped_cards=safe,
+                  reasons=dict(Counter(row['reason'] for row in safe)))
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix('.json.tmp')
+    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    temporary.replace(path)
+
+
+async def collect(*, limit=300, days=60, pages=4, channel="msedge", queue=None, diagnostics_path=None):
     from playwright.async_api import async_playwright, Error as BrowserError
     since = datetime.now(timezone.utc)
     until = since + timedelta(days=days)
     records, skipped, visited = {}, Counter(), 0
+    rejected, accepted_tasks = {}, {}
+    def report(complete=False):
+        write_skip_report(diagnostics_path, rejected.values(), complete=complete, fetched=visited, accepted=len(records))
+    def reject(task, reason):
+        rejected[task['url']] = dict(url=task['url'], category=task['category'], reason=reason)
+        if queue is not None:
+            queue.record(task['id'], 'empty')
+        report()
+    report()
     phase='home'
     try:
         async with async_playwright() as playwright:
@@ -104,7 +139,7 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge", queue=None):
                     lanes[path] = len(group)
                     print(json.dumps({'progress':'discovery', 'lane':path, 'cards':len(group)}), flush=True)
                 discovered=interleave(groups)
-                work=[{'url':url} for url in discovered[:limit]]
+                work=[{'url':url, 'category':categories[url]} for url in discovered[:limit]]
                 if queue is not None:
                     candidates=[describe_kudago(url,categories[url]) for url in discovered]
                     if any(t is None for t in candidates):raise SyncError('queue_invalid_kudago_candidate')
@@ -119,7 +154,7 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge", queue=None):
                         print(json.dumps({'progress':'details', 'pages':visited, 'events':len(records)}), flush=True)
                     if html is None:
                         skipped['removed_card'] += 1
-                        if queue is not None:queue.record(task['id'],'empty')
+                        reject(task, 'removed_card')
                         continue
                     record, reason = normalize(html, event_url(page.url), since, until)
                     if record:
@@ -127,9 +162,11 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge", queue=None):
                         if old and old != record:
                             raise SyncError("kudago_conflicting_card")
                         records[record["source_event_id"]] = record
+                        accepted_tasks.setdefault(record['source_event_id'], []).append(task)
+                        if queue is not None:queue.record(task['id'], 'checked')
                     else:
                         skipped[reason] += 1
-                    if queue is not None:queue.record(task['id'],'checked' if record else 'empty')
+                        reject(task, reason)
                 # A deep crawl takes minutes. A slot that started during it must
                 # not invalidate the whole signed batch at the receiver.
                 cutoff = datetime.now(timezone.utc) + timedelta(seconds=30)
@@ -138,6 +175,9 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge", queue=None):
                     if not record['occurrences'] and not record.get('period'):
                         del records[key]
                         skipped['started_during_collection'] += 1
+                        for task in accepted_tasks[key]:
+                            reject(task, 'started_during_collection')
+                report(complete=True)
                 return list(records.values()), dict(source="kudago", fetched=visited, discovered=len(discovered),
                                                    imported=len(records), sessions=sum(len(r["occurrences"]) for r in records.values()),
                                                    periods=sum(bool(r.get('period')) for r in records.values()),
@@ -148,11 +188,13 @@ async def collect(*, limit=300, days=60, pages=4, channel="msedge", queue=None):
             finally:
                 await browser.close()
     except SyncError:
+        report()
         # Only bounded phase/counters: never log page HTML, cookies or challenge URLs.
         print(json.dumps({'progress':'collection_stopped','source':'kudago','phase':phase,
                           'fetched':visited,'accepted':len(records)}),flush=True)
         raise
     except BrowserError:
+        report()
         raise SyncError("kudago_browser_navigation_failed") from None
 
 
@@ -164,6 +206,7 @@ def main():
     parser.add_argument("--days", type=int, default=60)
     parser.add_argument("--channel", choices=["msedge", "chrome", "chromium"], default="msedge" if sys.platform == "win32" else "chromium")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/kudago-events.json")
+    parser.add_argument("--diagnostics", type=Path, default=ROOT / "artifacts/kudago-skips.json")
     parser.add_argument("--key-file", type=Path, default=ROOT / "data/collector.key")
     args = parser.parse_args()
     if not 1 <= args.limit <= 600 or not 1 <= args.days <= 90 or not 1 <= args.pages <= 10:
@@ -174,7 +217,8 @@ def main():
         queue=DetailQueue(args.key_file,os.environ['COLLECTOR_RUN_KEY'],source='kudago') if args.publish and os.environ.get('COLLECTOR_RUN_KEY') else None
         async def run():
             async with asyncio.timeout(900):
-                return await collect(limit=args.limit, days=args.days, pages=args.pages, channel=args.channel,queue=queue)
+                return await collect(limit=args.limit, days=args.days, pages=args.pages, channel=args.channel,queue=queue,
+                                     diagnostics_path=args.diagnostics)
         records, stats = asyncio.run(run())
         if not records:
             if queue is not None:stats['queue']=queue.finish(0)
